@@ -1,0 +1,1 @@
+- [OpenAPI/Zod compatibility](openapi-zod-compatibility.md) — generated integer schemas may require a Zod version alignment; verify codegen with the workspace runtime.

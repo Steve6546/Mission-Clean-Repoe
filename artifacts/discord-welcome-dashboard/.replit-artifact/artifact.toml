@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Discord Welcome Dashboard"
+description = "A production-ready Arabic Discord welcome bot dashboard for configuring welcome cards, invite tracking, auto-roles, and server settings with a bold black, white, and red interface."
+version = "1.0.0"
+id = "artifacts/discord-welcome-dashboard"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19900
+
+[services.development]
+run = "pnpm --filter @workspace/discord-welcome-dashboard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/discord-welcome-dashboard", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/discord-welcome-dashboard/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19900"
+BASE_PATH = "/"

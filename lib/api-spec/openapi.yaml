@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: discord
+    description: Discord connection and server data
+  - name: welcome
+    description: Welcome card configuration
 paths:
   /healthz:
     get:
@@ -24,7 +28,117 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /discord/status:
+    get:
+      operationId: getDiscordStatus
+      tags: [discord]
+      summary: Return Discord connection status
+      responses:
+        "200":
+          description: Discord connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscordStatus"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [discord]
+      summary: Return dashboard summary for the current Discord connection
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+  /guilds:
+    get:
+      operationId: listGuilds
+      tags: [discord]
+      summary: List manageable Discord guilds
+      responses:
+        "200":
+          description: Manageable guilds
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Guild"
+  /guilds/{guildId}:
+    get:
+      operationId: getGuild
+      tags: [discord]
+      summary: Return one guild and its configuration metadata
+      parameters:
+        - $ref: "#/components/parameters/GuildId"
+      responses:
+        "200":
+          description: Guild details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuildDetails"
+        "404":
+          description: Guild not found
+  /guilds/{guildId}/activity:
+    get:
+      operationId: listGuildActivity
+      tags: [discord]
+      summary: List recent bot activity for a guild
+      parameters:
+        - $ref: "#/components/parameters/GuildId"
+      responses:
+        "200":
+          description: Recent activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityItem"
+  /guilds/{guildId}/settings:
+    get:
+      operationId: getWelcomeSettings
+      tags: [welcome]
+      summary: Get welcome settings for a guild
+      parameters:
+        - $ref: "#/components/parameters/GuildId"
+      responses:
+        "200":
+          description: Welcome settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WelcomeSettings"
+    put:
+      operationId: updateWelcomeSettings
+      tags: [welcome]
+      summary: Save welcome settings for a guild
+      parameters:
+        - $ref: "#/components/parameters/GuildId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WelcomeSettingsInput"
+      responses:
+        "200":
+          description: Saved welcome settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WelcomeSettings"
 components:
+  parameters:
+    GuildId:
+      name: guildId
+      in: path
+      required: true
+      schema:
+        type: string
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +147,281 @@ components:
           type: string
       required:
         - status
+    DiscordStatus:
+      type: object
+      required: [configured, connected, botUser, message]
+      properties:
+        configured:
+          type: boolean
+        connected:
+          type: boolean
+        botUser:
+          type: ["string", "null"]
+        message:
+          type: string
+    Guild:
+      type: object
+      required: [id, name, iconUrl, memberCount, canManage, botPresent, inviteUrl]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        iconUrl:
+          type: ["string", "null"]
+        memberCount:
+          type: number
+          minimum: 0
+        canManage:
+          type: boolean
+        botPresent:
+          type: boolean
+        inviteUrl:
+          type: ["string", "null"]
+    GuildDetails:
+      allOf:
+        - $ref: "#/components/schemas/Guild"
+        - type: object
+          required: [channels, roles]
+          properties:
+            channels:
+              type: array
+              items:
+                $ref: "#/components/schemas/DiscordChannel"
+            roles:
+              type: array
+              items:
+                $ref: "#/components/schemas/DiscordRole"
+    DiscordChannel:
+      type: object
+      required: [id, name, type]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+    DiscordRole:
+      type: object
+      required: [id, name, color, position, managed]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        color:
+          type: string
+        position:
+          type: number
+          minimum: 0
+        managed:
+          type: boolean
+    DashboardSummary:
+      type: object
+      required: [guildCount, configuredGuildCount, totalMembers, recentJoins, inviteAttributionRate]
+      properties:
+        guildCount:
+          type: number
+          minimum: 0
+        configuredGuildCount:
+          type: number
+          minimum: 0
+        totalMembers:
+          type: number
+          minimum: 0
+        recentJoins:
+          type: number
+          minimum: 0
+        inviteAttributionRate:
+          type: number
+        latestActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+    ActivityItem:
+      type: object
+      required: [id, kind, title, detail, createdAt]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        title:
+          type: string
+        detail:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    WelcomeSettings:
+      type: object
+      required: [guildId, enabled, style, channelId, headline, body, accentColor, backgroundUrl, includeInviter, autoRoleIds, memberAutoRoleIds, botAutoRoleIds, updatedAt]
+      properties:
+        guildId:
+          type: string
+        enabled:
+          type: boolean
+        style:
+          type: string
+          enum: [embed, banner]
+        channelId:
+          type: ["string", "null"]
+        headline:
+          type: string
+        body:
+          type: string
+        accentColor:
+          type: string
+        backgroundUrl:
+          type: ["string", "null"]
+        includeInviter:
+          type: boolean
+        autoRoleIds:
+          type: array
+          items:
+            type: string
+        memberAutoRoleIds:
+          type: array
+          items:
+            type: string
+        botAutoRoleIds:
+          type: array
+          items:
+            type: string
+        cardDesign:
+          $ref: "#/components/schemas/CardDesign"
+        messageSuite:
+          $ref: "#/components/schemas/MessageSuite"
+        commandConfig:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommandConfig"
+        updatedAt:
+          type: ["string", "null"]
+          format: date-time
+    WelcomeSettingsInput:
+      type: object
+      required: [enabled, style, channelId, headline, body, accentColor, backgroundUrl, includeInviter, autoRoleIds, memberAutoRoleIds, botAutoRoleIds]
+      properties:
+        enabled:
+          type: boolean
+        style:
+          type: string
+          enum: [embed, banner]
+        channelId:
+          type: ["string", "null"]
+        headline:
+          type: string
+        body:
+          type: string
+        accentColor:
+          type: string
+        backgroundUrl:
+          type: ["string", "null"]
+        includeInviter:
+          type: boolean
+        autoRoleIds:
+          type: array
+          items:
+            type: string
+        memberAutoRoleIds:
+          type: array
+          items:
+            type: string
+        botAutoRoleIds:
+          type: array
+          items:
+            type: string
+        cardDesign:
+          $ref: "#/components/schemas/CardDesign"
+        messageSuite:
+          $ref: "#/components/schemas/MessageSuite"
+        commandConfig:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommandConfig"
+    CardDesign:
+      type: object
+      required: [width, height, backgroundMode, backgroundUrl, avatar, username, extra]
+      properties:
+        width: { type: number, minimum: 320, maximum: 2400 }
+        height: { type: number, minimum: 180, maximum: 1400 }
+        backgroundMode:
+          type: string
+          enum: [url, transparent]
+        backgroundUrl:
+          type: ["string", "null"]
+        avatar:
+          type: object
+          required: [enabled, x, y, size, shape]
+          properties:
+            enabled: { type: boolean }
+            x: { type: number }
+            y: { type: number }
+            size: { type: number, minimum: 32, maximum: 600 }
+            shape:
+              type: string
+              enum: [square, rounded, circle]
+        username:
+          type: object
+          required: [enabled, text, x, y, font, size, lineHeight, align, color, shadow, shadowColor, shadowX, shadowY, shadowBlur]
+          properties:
+            enabled: { type: boolean }
+            text: { type: string, maxLength: 500 }
+            x: { type: number }
+            y: { type: number }
+            font:
+              type: string
+              enum: [CairoBold, ChangaBold, AlmaraiBold]
+            size: { type: number, minimum: 8, maximum: 160 }
+            lineHeight: { type: number, minimum: 0.8, maximum: 3 }
+            align:
+              type: string
+              enum: [right, center, left]
+            color: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+            shadow: { type: boolean }
+            shadowColor: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+            shadowX: { type: number, minimum: -50, maximum: 50 }
+            shadowY: { type: number, minimum: -50, maximum: 50 }
+            shadowBlur: { type: number, minimum: 0, maximum: 60 }
+        extra:
+          type: object
+          required: [enabled, url, x, y, width, height, opacity]
+          properties:
+            enabled: { type: boolean }
+            url:
+              type: ["string", "null"]
+            x: { type: number }
+            y: { type: number }
+            width: { type: number, minimum: 1, maximum: 1200 }
+            height: { type: number, minimum: 1, maximum: 1200 }
+            opacity: { type: number, minimum: 0, maximum: 100 }
+    MessageSuite:
+      type: object
+      required: [welcomeChannelEnabled, welcomeMessage, dmEnabled, dmMessage, leaveEnabled, leaveMessage]
+      properties:
+        welcomeChannelEnabled: { type: boolean }
+        welcomeMessage: { type: string, maxLength: 1024 }
+        dmEnabled: { type: boolean }
+        dmMessage: { type: string, maxLength: 1024 }
+        leaveEnabled: { type: boolean }
+        leaveMessage: { type: string, maxLength: 1024 }
+    CommandConfig:
+      type: object
+      required: [name, enabled, aliases, allowedRoleIds, blockedChannelIds, deleteCommand, deleteBotResponse]
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        aliases:
+          type: array
+          items: { type: string }
+        allowedRoleIds:
+          type: array
+          items: { type: string }
+        blockedChannelIds:
+          type: array
+          items: { type: string }
+        deleteCommand: { type: boolean }
+        deleteBotResponse: { type: boolean }
 
