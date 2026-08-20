@@ -134,6 +134,8 @@ router.put("/guilds/:guildId/settings", async (req, res) => {
         backgroundUrl: input.backgroundUrl,
         includeInviter: input.includeInviter,
         autoRoleIds: input.autoRoleIds,
+        memberAutoRoleIds: input.memberAutoRoleIds,
+        botAutoRoleIds: input.botAutoRoleIds,
         cardDesign: input.cardDesign ?? defaultCardDesign,
         messageSuite: input.messageSuite ?? defaultMessageSuite,
         commandConfig: input.commandConfig ?? defaultCommandConfig,
