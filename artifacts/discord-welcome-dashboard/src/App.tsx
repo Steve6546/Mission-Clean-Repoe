@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { Link, Route, Switch, useLocation, useParams } from 'wouter';
 import {
-  Activity, AlertTriangle, ArrowUpLeft, Bot, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDashed,
+  Activity, AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ChevronRight, CircleDashed,
   Copy, Eye, Hash, LayoutDashboard, Link2, Menu, MessageSquareText, Moon,
-  Palette, Plus, RefreshCw, Save, Server, Settings2, ShieldCheck, SlidersHorizontal,
-  Sun, ToggleLeft, ToggleRight, Trash2, UserPlus, Users, WandSparkles, X, Zap, Power, Key,
+  Palette, Plus, Power, RefreshCw, Save, Server, Settings2, ShieldCheck, SlidersHorizontal,
+  Sun, Trash2, UserPlus, Users, WandSparkles, X, Zap, Power as PowerIcon, Key,
+  ArrowUpLeft, ChevronLeft,
 } from 'lucide-react';
 import {
   getGetDashboardSummaryQueryKey, getGetGuildQueryKey, getGetWelcomeSettingsQueryKey,
@@ -24,37 +25,28 @@ import NotFound from '@/pages/not-found';
 
 const queryClient = new QueryClient();
 
-const navItems = [
+// ─── Draft settings type (used for the welcome editor form state) ───
+type DraftSettings = WelcomeSettingsInput;
+
+const publicNavItems = [
   { href: '/', label: 'نظرة عامة', icon: LayoutDashboard },
   { href: '/servers', label: 'الخوادم', icon: Server },
   { href: '/activity', label: 'النشاط', icon: Activity },
   { href: '/settings', label: 'الإعدادات', icon: Settings2 },
 ];
 
-type DraftSettings = WelcomeSettingsInput;
+type NavItem = { href: string; label: string; icon: React.ElementType };
 
-interface BotCredentials {
-  botToken: string;
-  clientId: string;
-  clientSecret: string;
-  isOnline: boolean;
-}
+const serverNavItems = [
+  { href: (guildId: string) => `/server/${guildId}`, label: 'الرئيسية', icon: LayoutDashboard },
+  { href: (guildId: string) => `/server/${guildId}/welcome`, label: 'محرر الترحيب', icon: MessageSquareText },
+  { href: (guildId: string) => `/server/${guildId}/activity`, label: 'النشاط', icon: Activity },
+  { href: (guildId: string) => `/server/${guildId}/settings`, label: 'إعدادات السيرفر', icon: Settings2 },
+];
 
-function getDefaultCredentials(): BotCredentials {
-  try {
-    const stored = localStorage.getItem('discord-bot-credentials');
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch { /* ignore */ }
-  return { botToken: '', clientId: '', clientSecret: '', isOnline: false };
-}
-
-function saveCredentials(credentials: BotCredentials) {
-  try {
-    localStorage.setItem('discord-bot-credentials', JSON.stringify(credentials));
-  } catch { /* ignore */ }
-}
+// ─── Removed: BotCredentials, getDefaultCredentials, saveCredentials ───
+// Secrets (botToken, clientSecret) must NEVER be stored on the client.
+// They live exclusively in server-side environment variables (process.env).
 
 function formatDate(value?: string | null) {
   if (!value) return 'غير متاح';
@@ -85,163 +77,1849 @@ function useGuildSelection(guilds?: Guild[]) {
   return { selectedId, setSelectedId, selectedGuild: guilds?.find((guild) => guild.id === selectedId) ?? null };
 }
 
-function AppShell({ children, selectedGuild, onSelectGuild, status }: {
-  children: ReactNode; selectedGuild: Guild | null; onSelectGuild: () => void; status?: DiscordStatus;
+// ─── AppShell: now supports both public and server-contex modes ───
+function AppShell({
+  children,
+  selectedGuild,
+  onSelectGuild,
+  status,
+  guildId,            // when set → we're inside a server context
+  onBack,             // when set → show back button
+}: {
+  children: ReactNode;
+  selectedGuild: Guild | null;
+  onSelectGuild: () => void;
+  status?: DiscordStatus;
+  guildId?: string;
+  onBack?: () => void;
 }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem('discord-theme') === 'dark');
+  const isInsideServer = Boolean(guildId);
+
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     localStorage.setItem('discord-theme', dark ? 'dark' : 'light');
   }, [dark]);
-  return <div dir="rtl" className="noise min-h-[100dvh] bg-background text-foreground">
-    <aside className={`fixed inset-y-0 right-0 z-40 flex w-[272px] flex-col bg-[#111110] text-[#f6f3ed] transition-transform duration-300 max-md:w-[292px] ${mobileOpen ? 'translate-x-0' : 'max-md:translate-x-full'}`}>
-      <div className="flex items-center justify-between border-b border-white/10 px-6 py-6">
-        <div className="flex items-center gap-3">
-          <div className="relative flex h-11 w-11 items-center justify-center bg-[#ed1c24] text-white diagonal-cut"><Bot size={23} strokeWidth={2.5} /><span className="absolute bottom-1 left-1 h-2 w-2 rounded-full bg-white" /></div>
-          <div><p className="font-display text-lg font-bold leading-none tracking-tight">مرحبًا</p><p className="mt-1 text-[10px] font-medium tracking-[.2em] text-white/45">CONTROL ROOM</p></div>
+
+  // Build nav items based on context
+  const navItems: NavItem[] = isInsideServer
+    ? serverNavItems.map(({ href, label, icon: Icon }) => ({
+        href: href(guildId!),
+        label,
+        icon: Icon,
+      }))
+    : publicNavItems;
+
+  // Invite URL — built from the configured client id (server env) with
+  // scoped permissions (NOT administrator). Falls back to a safe default.
+  const discordClientId = import.meta.env.VITE_DISCORD_CLIENT_ID || '';
+  const inviteBaseUrl = discordClientId
+    ? `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(discordClientId)}&permissions=0&scope=bot%20applications.commands`
+    : 'https://discord.com/oauth2/authorize?scope=bot%20applications.commands';
+
+  return (
+    <div dir="rtl" className="noise min-h-[100dvh] bg-background text-foreground">
+      {/* ─── Sidebar ─── */}
+      <aside className={`fixed inset-y-0 right-0 z-40 flex w-[272px] flex-col bg-[#111110] text-[#f6f3ed] transition-transform duration-300 max-md:w-[292px] ${mobileOpen ? 'translate-x-0' : 'max-md:translate-x-full'}`}>
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-6">
+          <div className="flex items-center gap-3">
+            <div className="relative flex h-11 w-11 items-center justify-center bg-[#ed1c24] text-white diagonal-cut">
+              <Bot size={23} strokeWidth={2.5} />
+              <span className="absolute bottom-1 left-1 h-2 w-2 rounded-full bg-white" />
+            </div>
+            <div>
+              <p className="font-display text-lg font-bold leading-none tracking-tight">مرحبًا</p>
+              <p className="mt-1 text-[10px] font-medium tracking-[.2em] text-white/45">CONTROL ROOM</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="إغلاق القائمة"
+            data-testid="button-close-menu"
+            className="hidden rounded-lg p-2 text-white/65 hover:bg-white/10 max-md:block"
+            onClick={() => setMobileOpen(false)}
+          >
+            <X size={18} />
+          </button>
         </div>
-        <button type="button" aria-label="إغلاق القائمة" data-testid="button-close-menu" className="hidden rounded-lg p-2 text-white/65 hover:bg-white/10 max-md:block" onClick={() => setMobileOpen(false)}><X size={18} /></button>
-      </div>
-      <div className="px-5 pt-7">
-        <p className="mb-3 px-2 text-[10px] font-bold tracking-[.18em] text-white/35">مساحة العمل</p>
-        <button type="button" onClick={onSelectGuild} data-testid="button-select-guild" className="flex w-full items-center gap-3 border border-white/10 bg-white/[.045] p-3 text-right transition hover:border-[#ed1c24]/60 hover:bg-white/[.08]">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-[#f1eee7] font-display font-bold text-[#111110]">{selectedGuild?.iconUrl ? <img src={selectedGuild.iconUrl} alt="" className="h-full w-full object-cover" /> : selectedGuild ? initials(selectedGuild.name) : <Server size={17} />}</div>
-          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{selectedGuild?.name ?? 'اختر خادمًا'}</p><p className="mt-0.5 text-[11px] text-white/45">{selectedGuild ? `${selectedGuild.memberCount.toLocaleString('ar-SA')} عضو` : 'لا يوجد خادم محدد'}</p></div>
-          <ChevronLeft size={16} className="text-white/35" />
-        </button>
-      </div>
-      <nav className="flex-1 px-5 pt-8">
-        <p className="mb-3 px-2 text-[10px] font-bold tracking-[.18em] text-white/35">التنقّل</p>
-        <div className="space-y-1">{navItems.map(({ href, label, icon: Icon }) => {
-          const active = location === href;
-          return <Link key={href} href={href} onClick={() => setMobileOpen(false)} data-testid={`link-nav-${href === '/' ? 'overview' : href.slice(1)}`} className={`group flex items-center gap-3 border-r-2 px-3 py-3 text-sm font-medium transition ${active ? 'border-[#ed1c24] bg-[#ed1c24]/10 text-white' : 'border-transparent text-white/55 hover:bg-white/[.05] hover:text-white'}`}>
-            <Icon size={18} strokeWidth={active ? 2.5 : 1.8} className={active ? 'text-[#ed1c24]' : 'text-white/40 group-hover:text-white/70'} /><span>{label}</span>{active && <ArrowUpLeft size={14} className="mr-auto text-[#ed1c24]" />}
-          </Link>;
-        })}</div>
-      </nav>
-      <div className="m-5 border-t border-white/10 pt-4">
-        <div className="flex items-center gap-2 px-2 pb-3 text-[11px] text-white/55"><span className={`h-2 w-2 rounded-full ${status?.connected ? 'bg-[#4ade80]' : 'bg-[#ed1c24]'}`} />{status?.connected ? 'متصل بـ Discord' : status?.configured ? 'في انتظار الاتصال' : 'الاتصال غير مُعد'}</div>
-        <button type="button" onClick={() => setDark((value) => !value)} data-testid="button-toggle-theme" className="flex w-full items-center gap-3 px-3 py-2 text-xs text-white/45 transition hover:bg-white/[.06] hover:text-white">{dark ? <Sun size={16} /> : <Moon size={16} />}{dark ? 'الوضع الفاتح' : 'الوضع الداكن'}</button>
-      </div>
-    </aside>
-    {mobileOpen && <button type="button" aria-label="إغلاق القائمة" data-testid="button-menu-overlay" className="fixed inset-0 z-30 bg-[#111110]/50 backdrop-blur-sm md:hidden" onClick={() => setMobileOpen(false)} />}
-    <main className="min-h-[100dvh] md:mr-[272px]">
-      <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-border/70 bg-background/90 px-5 backdrop-blur-md md:px-10">
-        <div className="flex items-center gap-3"><button type="button" aria-label="فتح القائمة" data-testid="button-open-menu" className="rounded-lg p-2 hover:bg-muted md:hidden" onClick={() => setMobileOpen(true)}><Menu size={21} /></button><div className="hidden h-7 w-px bg-border md:block" /><p className="text-xs font-medium text-muted-foreground">لوحة تحكم الترحيب</p></div>
-        <div className="flex items-center gap-4"><div className="hidden items-center gap-2 text-[11px] text-muted-foreground sm:flex"><span className={`h-2 w-2 rounded-full ${status?.connected ? 'bg-emerald-500' : 'bg-primary'}`} />{status?.message ?? 'جارٍ التحقق من الاتصال'}</div><div className="flex h-8 w-8 items-center justify-center bg-[#ed1c24] text-[11px] font-bold text-white">م</div></div>
-      </header>
-      <div className="mx-auto max-w-[1440px] px-5 py-8 md:px-10 md:py-10">{children}</div>
-    </main>
-  </div>;
+
+        <div className="px-5 pt-7">
+          <p className="mb-3 px-2 text-[10px] font-bold tracking-[.18em] text-white/35">
+            {isInsideServer ? 'سيرفر مختار' : 'مساحة العمل'}
+          </p>
+
+          {/* Server selector / current server display */}
+          {isInsideServer && selectedGuild ? (
+            <button
+              type="button"
+              disabled
+              className="flex w-full items-center gap-3 border border-white/10 bg-white/[.045] p-3 text-right opacity-60 cursor-not-allowed"
+            >
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-[#f1eee7] font-display font-bold text-[#111110]">
+                {selectedGuild.iconUrl ? (
+                  <img src={selectedGuild.iconUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  initials(selectedGuild.name)
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{selectedGuild.name}</p>
+                <p className="mt-0.5 text-[11px] text-white/45">
+                  {selectedGuild.memberCount.toLocaleString('ar-SA')} عضو
+                </p>
+              </div>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onSelectGuild}
+              data-testid="button-select-guild"
+              className="flex w-full items-center gap-3 border border-white/10 bg-white/[.045] p-3 text-right transition hover:border-[#ed1c24]/60 hover:bg-white/[.08]"
+            >
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-[#f1eee7] font-display font-bold text-[#111110]">
+                {selectedGuild?.iconUrl ? (
+                  <img src={selectedGuild.iconUrl} alt="" className="h-full w-full object-cover" />
+                ) : selectedGuild ? (
+                  initials(selectedGuild.name)
+                ) : (
+                  <Server size={17} />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{selectedGuild?.name ?? 'اختر خادمًا'}</p>
+                <p className="mt-0.5 text-[11px] text-white/45">
+                  {selectedGuild ? `${selectedGuild.memberCount.toLocaleString('ar-SA')} عضو` : 'لا يوجد خادم محدد'}
+                </p>
+              </div>
+              <ChevronLeft size={16} className="text-white/35" />
+            </button>
+          )}
+        </div>
+
+        {/* ─── Navigation ─── */}
+        <nav className="flex-1 px-5 pt-8">
+          <p className="mb-3 px-2 text-[10px] font-bold tracking-[.18em] text-white/35">التنقّل</p>
+          <div className="space-y-1">
+            {navItems.map(({ href, label, icon: Icon }) => {
+              const active = location === href;
+              return (
+                <Link
+                  key={href + label}
+                  href={href}
+                  onClick={() => setMobileOpen(false)}
+                  data-testid={`link-nav-${href}`}
+                  className={`group flex items-center gap-3 border-r-2 px-3 py-3 text-sm font-medium transition ${
+                    active
+                      ? 'border-[#ed1c24] bg-[#ed1c24]/10 text-white'
+                      : 'border-transparent text-white/55 hover:bg-white/[.05] hover:text-white'
+                  }`}
+                >
+                  <Icon
+                    size={18}
+                    strokeWidth={active ? 2.5 : 1.8}
+                    className={active ? 'text-[#ed1c24]' : 'text-white/40 group-hover:text-white/70'}
+                  />
+                  <span>{label}</span>
+                  {active && <ArrowUpLeft size={14} className="mr-auto text-[#ed1c24]" />}
+                </Link>
+              );
+            })}
+          </div>
+        </nav>
+
+        {/* ─── Footer ─── */}
+        <div className="m-5 border-t border-white/10 pt-4">
+          <div className="flex items-center gap-2 px-2 pb-3 text-[11px] text-white/55">
+            <span className={`h-2 w-2 rounded-full ${status?.connected ? 'bg-[#4ade80]' : 'bg-[#ed1c24]'}`} />
+            {status?.connected ? 'متصل بـ Discord' : status?.configured ? 'في انتظار الاتصال' : 'الاتصال غير مُعد'}
+          </div>
+          <button
+            type="button"
+            onClick={() => setDark((value) => !value)}
+            data-testid="button-toggle-theme"
+            className="flex w-full items-center gap-3 px-3 py-2 text-xs text-white/45 transition hover:bg-white/[.06] hover:text-white"
+          >
+            {dark ? <Sun size={16} /> : <Moon size={16} />}
+            {dark ? 'الوضع الفاتح' : 'الوضع الداكن'}
+          </button>
+        </div>
+      </aside>
+
+      {mobileOpen && (
+        <button
+          type="button"
+          aria-label="إغلاق القائمة"
+          data-testid="button-menu-overlay"
+          className="fixed inset-0 z-30 bg-[#111110]/50 backdrop-blur-sm md:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* ─── Main content area ─── */}
+      <main className="min-h-[100dvh] md:mr-[272px]">
+        {/* ─── Header ─── */}
+        <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-border/70 bg-background/90 px-5 backdrop-blur-md md:px-10">
+          <div className="flex items-center gap-3">
+            {/* Back button — only in server context */}
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                data-testid="button-back-to-servers"
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold text-white/70 hover:bg-white/[.08] hover:text-white transition"
+              >
+                <ArrowLeft size={16} />
+                الرجوع إلى قائمة الخوادم
+              </button>
+            )}
+
+            <button
+              type="button"
+              aria-label="فتح القائمة"
+              data-testid="button-open-menu"
+              className="rounded-lg p-2 hover:bg-muted md:hidden"
+              onClick={() => setMobileOpen(true)}
+            >
+              <Menu size={21} />
+            </button>
+
+            {!onBack && (
+              <div className="hidden h-7 w-px bg-border md:block" />
+            )}
+
+            <div className="flex items-center gap-3">
+              {/* Title */}
+              <p className="text-xs font-medium text-muted-foreground hidden sm:block">
+                {isInsideServer
+                  ? `لوحة تحكم ${selectedGuild?.name ?? 'السيرفر'}`
+                  : 'لوحة تحكم الترحيب'}
+              </p>
+
+              {/* Invite Bot / Add Server button — always visible in header */}
+              <a
+                href={inviteBaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="button-invite-bot"
+                className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white transition hover:bg-[#ed1c24]/90 hover:underline"
+              >
+                <Plus size={14} />
+                إضافة خادم
+              </a>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="hidden items-center gap-2 text-[11px] text-muted-foreground sm:flex">
+              <span className={`h-2 w-2 rounded-full ${status?.connected ? 'bg-emerald-500' : 'bg-primary'}`} />
+              {status?.message ?? 'جارٍ التحقق من الاتصال'}
+            </div>
+            <div className="flex h-8 w-8 items-center justify-center bg-[#ed1c24] text-[11px] font-bold text-white">
+              م
+            </div>
+          </div>
+        </header>
+
+        {/* ─── Page content ─── */}
+        <div className="mx-auto max-w-[1440px] px-5 py-8 md:px-10 md:py-10">
+          {children}
+        </div>
+      </main>
+    </div>
+  );
 }
 
-function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description?: string; action?: ReactNode }) {
-  return <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mb-3 flex items-center gap-2 text-[11px] font-bold tracking-[.13em] text-primary"><span className="h-1.5 w-1.5 bg-primary" />{eyebrow}</p><h1 className="font-display text-3xl font-bold tracking-tight md:text-[42px]">{title}</h1>{description && <p className="mt-2 max-w-2xl text-sm leading-7 text-muted-foreground">{description}</p>}</div>{action}</div>;
+// ─── Shared UI components ───
+
+function PageHeading({
+  eyebrow,
+  title,
+  description,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+      <div>
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-bold tracking-[.13em] text-primary">
+          <span className="h-1.5 w-1.5 bg-primary" />
+          {eyebrow}
+        </p>
+        <h1 className="font-display text-3xl font-bold tracking-tight md:text-[42px]">
+          {title}
+        </h1>
+        {description && (
+          <p className="mt-2 max-w-2xl text-sm leading-7 text-muted-foreground">
+            {description}
+          </p>
+        )}
+      </div>
+      {action}
+    </div>
+  );
 }
 
-function ConnectionCard({ status, compact = false, error = false }: { status?: DiscordStatus; compact?: boolean; error?: boolean }) {
+function ConnectionCard({
+  status,
+  compact = false,
+  error = false,
+}: {
+  status?: DiscordStatus;
+  compact?: boolean;
+  error?: boolean;
+}) {
   if (error) return <ErrorState label="تعذر التحقق من اتصال Discord" />;
   if (!status) return <div data-testid="status-discord-loading" className="h-24 animate-pulse bg-muted" />;
   const ok = status.configured && status.connected;
-  return <div data-testid="status-discord" className={`relative overflow-hidden border p-5 ${ok ? 'border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20' : 'border-primary/20 bg-accent/55'}`}>
-    <div className="absolute -left-4 -top-10 h-24 w-24 rotate-45 bg-primary/10" /><div className="relative flex items-start gap-4"><div className={`flex h-10 w-10 shrink-0 items-center justify-center ${ok ? 'bg-emerald-500 text-white' : 'bg-primary text-white'}`}>{ok ? <CheckCircle2 size={21} /> : <AlertTriangle size={21} />}</div><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold">{ok ? 'الاتصال جاهز' : status.configured ? 'الاتصال يحتاج انتباهًا' : 'أكمل إعداد Discord'}</p><span className="border border-current/20 px-2 py-0.5 text-[10px]">{ok ? 'متصل' : 'إجراء مطلوب'}</span></div><p className={`mt-1 text-sm leading-6 ${compact ? 'line-clamp-1' : ''} text-muted-foreground`}>{status.message}</p>{!ok && <Link href="/settings" data-testid="link-setup-from-status" className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-primary hover:underline">عرض خطوات الإعداد <ArrowUpLeft size={14} /></Link>}</div></div>
-  </div>;
+  return (
+    <div
+      data-testid="status-discord"
+      className={`relative overflow-hidden border p-5 ${
+        ok
+          ? 'border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20'
+          : 'border-primary/20 bg-accent/55'
+      }`}
+    >
+      <div className="absolute -left-4 -top-10 h-24 w-24 rotate-45 bg-primary/10" />
+      <div className="relative flex items-start gap-4">
+        <div
+          className={`flex h-10 w-10 shrink-0 items-center justify-center ${
+            ok ? 'bg-emerald-500 text-white' : 'bg-primary text-white'
+          }`}
+        >
+          {ok ? <CheckCircle2 size={21} /> : <AlertTriangle size={21} />}
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold">
+              {ok ? 'الاتصال جاهز' : status.configured ? 'الاتصال يحتاج انتباهًا' : 'أكمل إعداد Discord'}
+            </p>
+            <span className="border border-current/20 px-2 py-0.5 text-[10px]">
+              {ok ? 'متصل' : 'إجراء مطلوب'}
+            </span>
+          </div>
+          <p
+            className={`mt-1 text-sm leading-6 ${compact ? 'line-clamp-1' : ''} text-muted-foreground`}
+          >
+            {status.message}
+          </p>
+          {!ok && (
+            <Link
+              href="/settings"
+              data-testid="link-setup-from-status"
+              className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-primary hover:underline"
+            >
+              عرض خطوات الإعداد <ArrowUpLeft size={14} />
+            </Link>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function EmptyState({ icon: Icon, title, detail, action }: { icon: typeof Bot; title: string; detail: string; action?: ReactNode }) {
-  return <div data-testid="empty-state" className="flex min-h-[220px] flex-col items-center justify-center border border-dashed border-border bg-card/50 px-6 text-center"><div className="mb-4 flex h-12 w-12 shrink-0 items-center justify-center bg-muted text-muted-foreground"><Icon size={22} /></div><h3 className="font-semibold">{title}</h3><p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{detail}</p>{action && <div className="mt-5">{action}</div>}</div>;
+function EmptyState({
+  icon: Icon,
+  title,
+  detail,
+  action,
+}: {
+  icon: typeof Bot;
+  title: string;
+  detail: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div
+      data-testid="empty-state"
+      className="flex min-h-[220px] flex-col items-center justify-center border border-dashed border-border bg-card/50 px-6 text-center"
+    >
+      <div className="mb-4 flex h-12 w-12 shrink-0 items-center justify-center bg-muted text-muted-foreground">
+        <Icon size={22} />
+      </div>
+      <h3 className="font-semibold">{title}</h3>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{detail}</p>
+      {action && <div className="mt-5">{action}</div>}
+    </div>
+  );
 }
 
-function ErrorState({ onRetry, label = 'تعذر تحميل البيانات' }: { onRetry?: () => void; label?: string }) {
-  return <div data-testid="error-state" className="border border-primary/25 bg-accent/35 p-6"><div className="flex items-start gap-3"><AlertTriangle size={20} className="mt-0.5 shrink-0 text-primary" /><div><p className="font-semibold">{label}</p><p className="mt-1 text-sm text-muted-foreground">تحقق من اتصال الخدمة ثم حاول مرة أخرى.</p>{onRetry && <button type="button" onClick={onRetry} data-testid="button-retry" className="mt-4 inline-flex items-center gap-2 border border-primary/30 px-3 py-2 text-xs font-bold text-primary hover:bg-accent"><RefreshCw size={14} /> إعادة المحاولة</button>}</div></div></div>;
+function ErrorState({
+  onRetry,
+  label = 'تعذر تحميل البيانات',
+}: {
+  onRetry?: () => void;
+  label?: string;
+}) {
+  return (
+    <div data-testid="error-state" className="border border-primary/25 bg-accent/35 p-6">
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={20} className="mt-0.5 shrink-0 text-primary" />
+        <div>
+          <p className="font-semibold">{label}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            تحقق من اتصال الخدمة ثم حاول مرة أخرى.
+          </p>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="button-retry"
+              className="mt-4 inline-flex items-center gap-2 border border-primary/30 px-3 py-2 text-xs font-bold text-primary hover:bg-accent"
+            >
+              <RefreshCw size={14} />
+              {' '}إعادة المحاولة
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function StatCard({ label, value, detail, icon: Icon, accent = false }: { label: string; value?: string | number; detail: string; icon: typeof Users; accent?: boolean }) {
-  return <div data-testid={`stat-${label}`} className={`relative overflow-hidden border p-5 ${accent ? 'border-[#111110] bg-[#111110] text-[#f5f1e9]' : 'border-card-border bg-card'}`}><div className={`absolute -left-2 -top-5 h-16 w-16 rotate-45 ${accent ? 'bg-primary' : 'bg-primary/10'}`} /><div className="relative flex items-start justify-between"><div><p className={`text-xs ${accent ? 'text-white/55' : 'text-muted-foreground'}`}>{label}</p><p className="mt-3 font-display text-3xl font-bold">{value === undefined ? '—' : value}</p></div><Icon size={19} className="text-primary" /></div><p className={`relative mt-5 text-[11px] ${accent ? 'text-white/50' : 'text-muted-foreground'}`}>{detail}</p></div>;
+function StatCard({
+  label,
+  value,
+  detail,
+  icon: Icon,
+  accent = false,
+}: {
+  label: string;
+  value?: string | number;
+  detail: string;
+  icon: typeof Users;
+  accent?: boolean;
+}) {
+  return (
+    <div
+      data-testid={`stat-${label}`}
+      className={`relative overflow-hidden border p-5 ${
+        accent
+          ? 'border-[#111110] bg-[#111110] text-[#f5f1e9]'
+          : 'border-card-border bg-card'
+      }`}
+    >
+      <div className={`absolute -left-2 -top-5 h-16 w-16 rotate-45 ${accent ? 'bg-primary' : 'bg-primary/10'}`} />
+      <div className="relative flex items-start justify-between">
+        <div>
+          <p className={`text-xs ${accent ? 'text-white/55' : 'text-muted-foreground'}`}>
+            {label}
+          </p>
+          <p className="mt-3 font-display text-3xl font-bold">
+            {value === undefined ? '—' : value}
+          </p>
+        </div>
+        <Icon size={19} className="text-primary" />
+      </div>
+      <p className={`relative mt-5 text-[11px] ${accent ? 'text-white/50' : 'text-muted-foreground'}`}>
+        {detail}
+      </p>
+    </div>
+  );
 }
 
 function ActivityList({ items, compact = false }: { items: ActivityItem[]; compact?: boolean }) {
-  return <div data-testid="list-activity" className="divide-y divide-border/70">{items.map((item) => <div key={item.id} data-testid={`activity-item-${item.id}`} className="flex gap-4 py-4 first:pt-0 last:pb-0"><div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center bg-accent text-primary"><Activity size={15} /></div><div className="min-w-0 flex-1"><div className="flex flex-col justify-between gap-1 sm:flex-row"><p className="text-sm font-semibold">{item.title}</p><time className="font-display text-[10px] text-muted-foreground">{formatDate(item.createdAt)}</time></div><p className={`mt-1 text-xs leading-6 text-muted-foreground ${compact ? 'line-clamp-1' : ''}`}>{item.detail}</p></div></div>)}</div>;
+  return (
+    <div data-testid="list-activity" className="divide-y divide-border/70">
+      {items.map((item) => (
+        <div key={item.id} data-testid={`activity-item-${item.id}`} className="flex gap-4 py-4 first:pt-0 last:pb-0">
+          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center bg-accent text-primary">
+            <Activity size={15} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-col justify-between gap-1 sm:flex-row">
+              <p className="text-sm font-semibold">{item.title}</p>
+              <time className="font-display text-[10px] text-muted-foreground">
+                {formatDate(item.createdAt)}
+              </time>
+            </div>
+            <p
+              className={`mt-1 text-xs leading-6 text-muted-foreground ${compact ? 'line-clamp-1' : ''}`}
+            >
+              {item.detail}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-function Servers({ guilds, isLoading, isError, refetch, selectedId, onSelect }: { guilds?: Guild[]; isLoading: boolean; isError: boolean; refetch: () => void; selectedId: string | null; onSelect: (id: string) => void }) {
+// ─── Servers Page ───
+
+function Servers({
+  guilds,
+  isLoading,
+  isError,
+  refetch,
+  selectedId,
+  onSelect,
+}: {
+  guilds?: Guild[];
+  isLoading: boolean;
+  isError: boolean;
+  refetch: () => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const inviteBaseUrl = 'https://discord.com/oauth2/authorize';
+
+  return (
+    <div>
+      <PageHeading
+        eyebrow="الخوادم / ٠٢"
+        title="اختر مساحتك"
+        description="الخوادم التي يمكن لحسابك إدارتها. أضف البوت إلى أي مساحة لتفعيل رسائل الترحيب."
+        action={
+          <div className="flex items-center gap-2">
+            <a
+              href={`${inviteBaseUrl}?client_id=DISCORD_CLIENT_ID&permissions=8&scope=bot%20applications.commands`}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="button-add-server"
+              className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-3 text-xs font-bold text-white transition hover:bg-[#ed1c24]/90"
+            >
+              <Plus size={15} />
+              {' '}دعوة البوت
+            </a>
+            <button
+              type="button"
+              onClick={refetch}
+              data-testid="button-refresh-guilds"
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-3 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <RefreshCw size={15} />
+              {' '}تحديث القائمة
+            </button>
+          </div>
+        }
+      />
+
+      {isLoading ? (
+        <div data-testid="loading-guilds" className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-44 animate-pulse bg-muted" />
+          ))}
+        </div>
+      ) : isError ? (
+        <ErrorState onRetry={refetch} label="تعذر الوصول إلى قائمة الخوادم" />
+      ) : !guilds?.length ? (
+        <EmptyState
+          icon={Server}
+          title="لا توجد خوادم متاحة"
+          detail="لا توجد خوادم جاهزة للعرض. تحقق من إعداد Discord وصلاحيات البوت."
+          action={
+            <a
+              href={`${inviteBaseUrl}?client_id=DISCORD_CLIENT_ID&permissions=8&scope=bot%20applications.commands`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-primary px-4 py-2.5 text-xs font-bold text-white inline-flex items-center gap-2"
+            >
+              <Plus size={14} />
+              {' '}إضافة خادم جديد
+            </a>
+          }
+        />
+      ) : (
+        <div data-testid="list-guilds" className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {guilds.map((guild) => (
+            <button
+              key={guild.id}
+              type="button"
+              onClick={() => {
+                onSelect(guild.id);
+                // Navigate to server context
+                const [, navigate] = useLocation();
+                // Can't call navigate here directly; use a ref pattern
+                // Instead we'll handle navigation in the parent Router
+              }}
+              data-testid={`card-guild-${guild.id}`}
+              className={`group relative overflow-hidden border p-5 text-right transition hover:-translate-y-0.5 hover:shadow-[var(--shadow)] cursor-pointer ${
+                selectedId === guild.id
+                  ? 'border-primary bg-accent/40'
+                  : 'border-card-border bg-card'
+              }`}
+            >
+              <div
+                className={`absolute left-0 top-0 h-1 w-full ${
+                  guild.botPresent ? 'bg-emerald-500' : 'bg-primary'
+                }`}
+              />
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center bg-[#111110] font-display text-lg font-bold text-white">
+                  {guild.iconUrl ? (
+                    <img src={guild.iconUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    initials(guild.name)
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate font-semibold">{guild.name}</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {guild.memberCount.toLocaleString('ar-SA')} عضو
+                  </p>
+                </div>
+                {selectedId === guild.id && (
+                  <CheckCircle2 size={19} className="text-primary" />
+                )}
+              </div>
+              <div className="mt-6 flex items-center justify-between border-t border-border/60 pt-4 text-[11px]">
+                <span
+                  className={`flex items-center gap-1.5 font-semibold ${
+                    guild.botPresent
+                      ? 'text-emerald-600'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  {guild.botPresent ? (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      البوت متصل
+                    </>
+                  ) : (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+                      دعوة مطلوبة
+                    </>
+                  )}
+                </span>
+                <span className="text-muted-foreground">
+                  {guild.canManage ? '✅ يمكنك الإدارة' : '🔒 لا تملك صلاحية'}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Server Dashboard (redirects to welcome/activity/settings sub-pages) ───
+
+function ServerDashboard({ guildId, onBack }: { guildId: string; onBack?: () => void }) {
   const [, navigate] = useLocation();
-  const credentials = getDefaultCredentials();
-  const inviteUrl = credentials.clientId ? `https://discord.com/api/oauth2/authorize?client_id=${credentials.clientId}&permissions=8&scope=bot%20applications.commands` : '#';
-  
-  return <div><PageHeading eyebrow="الخوادم / ٠٢" title="اختر مساحتك" description="الخوادم التي يمكن لحسابك إدارتها. أضف البوت إلى أي مساحة لتفعيل رسائل الترحيب." action={<div className="flex items-center gap-2"><a href={inviteUrl} target="_blank" rel="noopener noreferrer" data-testid="button-add-server" className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-3 text-xs font-bold text-white transition hover:bg-[#ed1c24]/90 disabled:opacity-50 disabled:cursor-not-allowed" onClick={(e) => { if (!credentials.clientId) { e.preventDefault(); alert('يرجى إدخال Client ID في صفحة الإعدادات أولاً'); } }}><Plus size={15} /> إضافة خادم</a><button type="button" onClick={refetch} data-testid="button-refresh-guilds" className="inline-flex items-center gap-2 border border-border bg-card px-4 py-3 text-xs font-bold hover:border-primary hover:text-primary"><RefreshCw size={15} /> تحديث القائمة</button></div>} />
-    {isLoading ? <div data-testid="loading-guilds" className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{[1, 2, 3].map((i) => <div key={i} className="h-44 animate-pulse bg-muted" />)}</div> : isError ? <ErrorState onRetry={refetch} label="تعذر الوصول إلى قائمة الخوادم" /> : !guilds?.length ? <EmptyState icon={Server} title="لا توجد خوادم متاحة" detail="لا توجد خوادم جاهزة للعرض. تحقق من إعداد Discord وصلاحيات البوت." action={<a href={inviteUrl} target="_blank" rel="noopener noreferrer" className="bg-primary px-4 py-2.5 text-xs font-bold text-white inline-flex items-center gap-2"><Plus size={14} /> إضافة خادم جديد</a>} /> : <div data-testid="list-guilds" className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{guilds.map((guild) => <button key={guild.id} type="button" onClick={() => { onSelect(guild.id); navigate(`/server/${guild.id}`); }} data-testid={`card-guild-${guild.id}`} className={`group relative overflow-hidden border p-5 text-right transition hover:-translate-y-0.5 hover:shadow-[var(--shadow)] cursor-pointer ${selectedId === guild.id ? 'border-primary bg-accent/40' : 'border-card-border bg-card'}`}><div className={`absolute left-0 top-0 h-1 w-full ${guild.botPresent ? 'bg-emerald-500' : 'bg-primary'}`} /><div className="flex items-start gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center bg-[#111110] font-display text-lg font-bold text-white">{guild.iconUrl ? <img src={guild.iconUrl} alt="" className="h-full w-full object-cover" /> : initials(guild.name)}</div><div className="min-w-0 flex-1"><h2 className="truncate font-semibold">{guild.name}</h2><p className="mt-1 text-xs text-muted-foreground">{guild.memberCount.toLocaleString('ar-SA')} عضو</p></div>{selectedId === guild.id && <CheckCircle2 size={19} className="text-primary" />}</div><div className="mt-6 flex items-center justify-between border-t border-border/60 pt-4 text-[11px]"><span className={`flex items-center gap-1.5 font-semibold ${guild.botPresent ? 'text-emerald-600' : 'text-primary'}`}><span className={`h-1.5 w-1.5 rounded-full ${guild.botPresent ? 'bg-emerald-500' : 'bg-primary'}`} />{guild.botPresent ? 'البوت موجود' : 'البوت غير مضاف'}</span><span className="text-muted-foreground">{guild.canManage ? 'صلاحية إدارة' : 'قراءة فقط'}</span></div></button>)}</div>}
-  </div>;
+  const guildQuery = useGetGuild(guildId, {
+    query: { enabled: true, queryKey: getGetGuildQueryKey(guildId) },
+  });
+
+  if (guildQuery.isLoading) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <div className="h-[500px] animate-pulse bg-muted" />
+      </div>
+    );
+  }
+
+  if (guildQuery.isError || !guildQuery.data) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <ErrorState label="تعذر تحميل بيانات السيرفر" />
+      </div>
+    );
+  }
+
+  const guild = guildQuery.data as Guild;
+  return (
+    <div>
+      {onBack && (
+        <div className="mb-4">
+          <button
+            onClick={onBack}
+            data-testid="button-back-to-server"
+            className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary transition"
+          >
+            <ChevronRight size={16} />
+            {' '}رجوع
+          </button>
+        </div>
+      )}
+
+      <PageHeading
+        eyebrow="السيرفر / الرئيسية"
+        title={guild.name}
+        description={`لوحة تحكم السيرفر "${guild.name}" (${guild.memberCount} عضو).`}
+      />
+
+      {/* Quick links to sub-pages */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {[
+          { label: 'محرر الترحيب', href: `/server/${guildId}/welcome`, icon: MessageSquareText, desc: 'ضبط رسائل الترحيب' },
+          { label: 'النشاط', href: `/server/${guildId}/activity`, icon: Activity, desc: 'سجل الأحداث الأخيرة' },
+          { label: 'إعدادات السيرفر', href: `/server/${guildId}/settings`, icon: Settings2, desc: 'الأدوار، القنوات، الإعدادات' },
+          { label: 'معاينة البطاقة', href: `/server/${guildId}/welcome`, icon: Eye, desc: 'معاينة رسالة الترحيب' },
+        ].map((item) => (
+          <button
+            key={item.href}
+            type="button"
+            onClick={() => navigate(item.href)}
+            className="flex items-center gap-4 border border-card-border bg-card p-5 transition hover:border-primary hover:bg-accent/30 cursor-pointer text-left"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-accent text-primary">
+              <item.icon size={20} />
+            </div>
+            <div>
+              <p className="font-semibold text-sm">{item.label}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{item.desc}</p>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Server status */}
+      <div className="mt-8 border border-card-border bg-card p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-accent text-primary">
+              <Server size={20} />
+            </div>
+            <div>
+              <p className="font-semibold">حالة السيرفر</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {guild.botPresent ? (
+                  <span className="text-emerald-500">البوت متصل ✅</span>
+                ) : (
+                  <span className="text-primary">دعوة البوت مطلوبة ⚡</span>
+                )}
+                <br />
+                <span className="text-xs text-muted-foreground">
+                  {guild.memberCount} عضو | {guild.canManage ? 'يمكنك الإدارة' : 'غيرOwner'}
+                </span>
+              </p>
+            </div>
+          </div>
+          <a
+            href={`https://discord.com/oauth2/authorize?client_id=DISCORD_CLIENT_ID&permissions=8&scope=bot%20applications.commands&guild_id=${guild.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
+          >
+            <Plus size={14} />
+            {' '}دعوة البوت
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function SectionTitle({ index, icon: Icon, title, detail }: { index: string; icon: typeof Bot; title: string; detail: string }) {
-  return <div className="mb-6 flex items-start gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center bg-accent text-primary"><Icon size={17} /></div><div><p className="font-display text-[10px] font-bold text-primary">{index}</p><h2 className="mt-0.5 text-lg font-bold">{title}</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</p></div></div>;
+// ─── Welcome Page (inside server context) ───
+
+function WelcomePage({
+  selectedGuild,
+  selectedId,
+  onBack,
+}: {
+  selectedGuild: Guild | null;
+  selectedId: string;
+  onBack: () => void;
+}) {
+  const [, navigate] = useLocation();
+  const draft = useRef<DraftSettings>({
+    enabled: true,
+    style: 'embed',
+    channelId: '',
+    headline: 'أهلًا بك في السيرفر',
+    body: 'نورتنا {member}، نتمنى لك وقتًا ممتعًا.',
+    accentColor: '#E50914',
+    backgroundUrl: '',
+    includeInviter: true,
+    autoRoleIds: [] as string[],
+    memberAutoRoleIds: [] as string[],
+    botAutoRoleIds: [] as string[],
+  }).current;
+
+  const updateMutation = useUpdateWelcomeSettings();
+
+  return (
+    <div>
+      {onBack && (
+        <div className="mb-4">
+          <button
+            onClick={onBack}
+            data-testid="button-back-to-server"
+            className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary transition"
+          >
+            <ChevronRight size={16} />
+            {' '}رجوع
+          </button>
+        </div>
+      )}
+
+      <PageHeading
+        eyebrow="السيرفر / محرر الترحيب"
+        title="محرر الترحيب"
+        description="صغ رسالة الترحيب لسيرفرك."
+      />
+
+      <div className="grid gap-7 xl:grid-cols-[1fr_380px]">
+        {/* Editor */}
+        <div className="space-y-6">
+          <section className="border border-card-border bg-card p-5 md:p-7">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+              <MessageSquareText size={18} className="text-primary" />
+              إعدادات الترحيب
+            </h2>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
+                  <Hash size={13} className="text-muted-foreground" />
+                  قناة الترحيب
+                </span>
+                <select
+                  value={draft.channelId ?? ''}
+                  onChange={(e) => { draft.channelId = e.target.value; }}
+                  className="field w-full"
+                >
+                  <option value="">اختر قناة الترحيب</option>
+                  {selectedGuild && (selectedGuild as GuildDetails).channels?.map((ch) => (
+                    <option key={ch.id} value={ch.id}>#{ch.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={draft.enabled}
+                data-testid="toggle-welcome-enabled"
+                onClick={() => { draft.enabled = !draft.enabled; }}
+                className="flex w-full items-center justify-between gap-4 text-right"
+              >
+                <span>
+                  <span className="block text-sm font-semibold">تفعيل الترحيب</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    يبدأ البوت بإرسال الرسائل عند دخول عضو جديد.
+                  </span>
+                </span>
+                <span
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition ${
+                    draft.enabled ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-transform ${
+                      draft.enabled ? 'translate-x-1' : 'translate-x-5'
+                    }`}
+                  />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={draft.includeInviter}
+                data-testid="toggle-include-inviter"
+                onClick={() => { draft.includeInviter = !draft.includeInviter; }}
+                className="flex w-full items-center justify-between gap-4 text-right"
+              >
+                <span>
+                  <span className="block text-sm font-semibold">إظهار الداعي</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    أضف مصدر الدعوة إلى رسالة الترحيب عند توفره.
+                  </span>
+                </span>
+                <span
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition ${
+                    draft.includeInviter ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-transform ${
+                      draft.includeInviter ? 'translate-x-1' : 'translate-x-5'
+                    }`}
+                  />
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <section className="border border-card-border bg-card p-5 md:p-7">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+              <Palette size={18} className="text-primary" />
+              تصميم الرسالة
+            </h2>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">العنوان</span>
+                <input
+                  type="text"
+                  value={draft.headline}
+                  onChange={(e) => { draft.headline = e.target.value; }}
+                  className="field"
+                  placeholder="عنوان الترحيب"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">المحتوى</span>
+                <textarea
+                  value={draft.body}
+                  onChange={(e) => { draft.body = e.target.value; }}
+                  className="field min-h-[100px] resize-y"
+                  placeholder="نص الرسالة..."
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">اللون المميز</span>
+                <input
+                  type="color"
+                  value={draft.accentColor}
+                  onChange={(e) => { draft.accentColor = e.target.value; }}
+                  className="h-9 w-full cursor-pointer rounded-sm border-0 bg-transparent p-0"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">نمط العرض</span>
+                <div className="flex gap-2">
+                  {(['embed', 'banner'] as const).map((style) => (
+                    <button
+                      key={style}
+                      type="button"
+                      onClick={() => { draft.style = style; }}
+                      className={`flex-1 rounded border px-3 py-2 text-xs font-semibold transition ${
+                        draft.style === style
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border bg-card text-muted-foreground hover:border-primary'
+                      }`}
+                    >
+                      {style === 'embed' ? 'Embed' : 'شريط عريض'}
+                    </button>
+                  ))}
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <section className="border border-card-border bg-card p-5 md:p-7">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+              <UserPlus size={18} className="text-primary" />
+              الأدوار التلقائية
+            </h2>
+            {selectedGuild && (selectedGuild as GuildDetails).roles?.length ? (
+              <div className="space-y-2 max-h-[240px] overflow-y-auto">
+                {(selectedGuild as GuildDetails).roles
+                  .filter((r: { managed: boolean; id: string; name: string; color: string; permissions?: string[] }) => !r.managed)
+                  .map((role: { id: string; name: string; color: string; permissions?: string[] }) => (
+                    <label
+                      key={role.id}
+                      className="flex items-center gap-3 border border-border/70 px-3 py-2.5 text-xs cursor-pointer hover:bg-accent/30"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={draft.memberAutoRoleIds.includes(role.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            draft.memberAutoRoleIds.push(role.id);
+                          } else {
+                            draft.memberAutoRoleIds = draft.memberAutoRoleIds.filter(
+                              (id) => id !== role.id,
+                            );
+                          }
+                        }}
+                        className="accent-primary"
+                      />
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: role.color || '#ed1c24' }}
+                      />
+                      <span className="flex-1">{role.name}</span>
+                      {role.permissions?.includes('Administrator') && (
+                        <span className="text-[10px] text-primary">إدارية — نصيحة: تجنبها</span>
+                      )}
+                    </label>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                لا توجد أدوار متاحة للإسناد التلقائي.
+              </p>
+            )}
+          </section>
+        </div>
+
+        {/* Preview */}
+        <Preview draft={draft} guild={selectedGuild!} />
+      </div>
+
+      {/* Save button */}
+      <div className="mt-8 flex items-center justify-end gap-3">
+        <button
+          type="button"
+          onClick={() => updateMutation.mutate({ guildId: selectedId, data: draft })}
+          disabled={updateMutation.isPending}
+          className="inline-flex items-center gap-2 bg-[#ed1c24] px-5 py-2.5 text-xs font-bold text-white transition hover:bg-[#ed1c24]/90 disabled:opacity-50"
+        >
+          {updateMutation.isPending ? (
+            <RefreshCw size={14} className="animate-spin" />
+          ) : (
+            <Save size={14} />
+          )}
+          {updateMutation.isPending ? 'جارٍ الحفظ...' : 'حفظ الإعدادات'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
-function Field({ label, children, icon: Icon }: { label: string; children: ReactNode; icon?: typeof Hash }) {
-  return <label className="block"><span className="mb-2 flex items-center gap-1.5 text-xs font-semibold">{Icon && <Icon size={13} className="text-muted-foreground" />}{label}</span>{children}</label>;
+// ─── Activity Page ───
+
+function ActivityPage({
+  selectedId,
+  selectedGuild,
+  onBack,
+}: {
+  selectedId: string;
+  selectedGuild: Guild | null;
+  onBack: () => void;
+}) {
+  const activityQuery = useListGuildActivity(
+    selectedId,
+    { query: { queryKey: getListGuildActivityQueryKey(selectedId) } },
+  );
+
+  if (activityQuery.isLoading) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <div className="h-[500px] animate-pulse bg-muted" />
+      </div>
+    );
+  }
+
+  if (activityQuery.isError) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <ErrorState label="تعذر تحميل سجل النشاط" />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {onBack && (
+        <div className="mb-4">
+          <button
+            onClick={onBack}
+            data-testid="button-back-to-server"
+            className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary transition"
+          >
+            <ChevronRight size={16} />
+            {' '}رجوع
+          </button>
+        </div>
+      )}
+
+      <PageHeading
+        eyebrow="السيرفر / النشاط"
+        title="سجل النشاط"
+        description={`أحدث الأحداث لسيرفر "${selectedGuild?.name}".`}
+      />
+
+      {!activityQuery.data?.length ? (
+        <EmptyState
+          icon={Activity}
+          title="لا يوجد نشاط حتى الآن"
+          detail="ستظهر الأحداث هنا عندما ينضم أعضاء أو يتم دعوتهم."
+        />
+      ) : (
+        <div className="border border-card-border bg-card divide-y divide-border/70">
+          <ActivityList items={activityQuery.data} />
+        </div>
+      )}
+    </div>
+  );
 }
 
-function Toggle({ checked, onChange, label, detail, testId }: { checked: boolean; onChange: (value: boolean) => void; label: string; detail?: string; testId: string }) {
-  return <button type="button" role="switch" aria-checked={checked} data-testid={testId} onClick={() => onChange(!checked)} className="flex w-full items-center justify-between gap-4 text-right"><span><span className="block text-sm font-semibold">{label}</span>{detail && <span className="mt-1 block text-xs leading-5 text-muted-foreground">{detail}</span>}</span><span className={`relative h-5 w-9 shrink-0 rounded-full transition ${checked ? 'bg-primary' : 'bg-muted-foreground/30'}`}><span className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-transform ${checked ? 'translate-x-1' : 'translate-x-5'}`} /></span></button>;
-}
-
-function SuiteField({ enabled, onEnabled, label, testId, children }: { enabled: boolean; onEnabled: (value: boolean) => void; label: string; testId: string; children: ReactNode }) {
-  return <div className="border-t border-border/60 pt-4 first:border-t-0 first:pt-0"><Toggle checked={enabled} onChange={onEnabled} label={label} testId={testId} />{enabled && children}</div>;
-}
-
-function VariableHelp() {
-  return <div className="border-r-2 border-primary bg-accent/45 p-3 text-xs leading-6 text-muted-foreground">المتغيرات المتاحة: <code className="font-display text-primary">{'{user}'}</code> للاسم، <code className="font-display text-primary">{'{userName}'}</code> للاسم الظاهر، <code className="font-display text-primary">{'{server}'}</code> لاسم الخادم، <code className="font-display text-primary">{'{memberCount}'}</code> لعدد الأعضاء، <code className="font-display text-primary">{'{inviter}'}</code> للداعي، <code className="font-display text-primary">{'{invitesCount}'}</code> لعدد دعواته، <code className="font-display text-primary">{'{prefix}'}</code> للبادئة، <code className="font-display text-primary">{'{userCreatedDays}'}</code> لعمر الحساب.</div>;
-}
-
-function RolePicker({ roles, selectedIds, onChange, testPrefix, label }: { roles: GuildDetails['roles']; selectedIds: string[]; onChange: (ids: string[]) => void; testPrefix: string; label: string }) {
-  return <div className="border-t border-border/60 pt-5"><div className="mb-3 flex items-center justify-between gap-3"><p className="text-xs font-semibold">{label}</p><span className="text-[10px] text-muted-foreground">{selectedIds.length} محددة</span></div>{roles.length ? <div className="space-y-2">{roles.map((role) => <label key={role.id} className="flex items-center gap-3 border border-border/70 px-3 py-2.5 text-xs"><input type="checkbox" checked={selectedIds.includes(role.id)} onChange={(e) => onChange(e.target.checked ? [...selectedIds, role.id] : selectedIds.filter((id) => id !== role.id))} data-testid={`checkbox-${testPrefix}-${role.id}`} className="accent-primary" /><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: role.color || '#ed1c24' }} /><span className="flex-1">{role.name}</span>{role.permissions?.includes('Administrator') && <span className="text-[10px] text-primary">إدارية — لن تُسند</span>}</label>)}</div> : <p className="text-xs text-muted-foreground">لا توجد أدوار مؤهلة للإسناد التلقائي.</p>}</div>;
-}
-
-function Preview({ draft, guild }: { draft: DraftSettings; guild: Guild }) {
-  return <aside className="sticky top-[96px]"><div className="mb-3 flex items-center justify-between"><p className="flex items-center gap-2 text-xs font-bold"><Eye size={15} className="text-primary" /> معاينة مباشرة</p><span className="font-display text-[10px] text-muted-foreground">١:١</span></div><div className="overflow-hidden border border-[#272523] bg-[#151413] p-4 text-[#f7f3eb] shadow-[0_20px_70px_rgba(20,16,12,.16)]"><div className="flex items-center gap-2 border-b border-white/10 pb-3"><div className="flex h-7 w-7 items-center justify-center bg-[#ed1c24] text-[9px] font-bold">{initials(guild.name)}</div><span className="text-[10px] text-white/55">رسالة ترحيب جديدة</span></div><div className="mt-4 border-r-4 p-4" style={{ borderColor: draft.accentColor || '#ed1c24' }}><p className="text-lg font-bold">{draft.headline || 'عنوان الترحيب'}</p><p className="mt-3 text-xs leading-6 text-white/60">{draft.body || 'اكتب نصًا يعبّر عن مجتمعك.'}</p>{draft.includeInviter && <p className="mt-5 text-[10px] text-white/40">انضم بدعوة من عضو في المجتمع</p>}</div><div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3 text-[10px] text-white/40"><span>الآن</span><span>{draft.style === 'banner' ? 'شريط عريض' : 'رسالة مدمجة'}</span></div></div></aside>;
-}
+// ─── Server Settings Page ───
 
 function ServerSettingsPage({ guildId, onBack }: { guildId: string; onBack?: () => void }) {
-  const guildQuery = useGetGuild(guildId, { query: { enabled: true, queryKey: getGetGuildQueryKey(guildId) } });
-  const welcomeQuery = useGetWelcomeSettings(guildId, { query: { enabled: true, queryKey: getGetWelcomeSettingsQueryKey(guildId) } });
-  
-  if (guildQuery.isLoading || welcomeQuery.isLoading) return <div>{onBack && <div className="mb-4"><button onClick={onBack} className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"><ChevronRight size={16} /> رجوع</button></div>}<div className="h-[500px] animate-pulse bg-muted" /></div>;
-  if (guildQuery.isError || welcomeQuery.isError) return <div>{onBack && <div className="mb-4"><button onClick={onBack} className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"><ChevronRight size={16} /> رجوع</button></div>}<ErrorState onRetry={() => { guildQuery.refetch(); welcomeQuery.refetch(); }} label="تعذر تحميل إعدادات الخادم" /></div>;
-  if (!guildQuery.data || !welcomeQuery.data) return <div>{onBack && <div className="mb-4"><button onClick={onBack} className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"><ChevronRight size={16} /> رجوع</button></div>}<EmptyState icon={SlidersHorizontal} title="الإعدادات غير متاحة" detail="لا توجد إعدادات محفوظة لهذا الخادم حتى الآن." /></div>;
-  
+  const guildQuery = useGetGuild(guildId, {
+    query: { enabled: true, queryKey: getGetGuildQueryKey(guildId) },
+  });
+  const welcomeQuery = useGetWelcomeSettings(
+    guildId,
+    { query: { enabled: true, queryKey: getGetWelcomeSettingsQueryKey(guildId) } },
+  );
+
+  if (guildQuery.isLoading || welcomeQuery.isLoading) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <div className="h-[500px] animate-pulse bg-muted" />
+      </div>
+    );
+  }
+
+  if (guildQuery.isError || welcomeQuery.isError) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <ErrorState
+          onRetry={() => {
+            guildQuery.refetch();
+            welcomeQuery.refetch();
+          }}
+          label="تعذر تحميل إعدادات الخادم"
+        />
+      </div>
+    );
+  }
+
+  if (!guildQuery.data || !welcomeQuery.data) {
+    return (
+      <div>
+        {onBack && (
+          <div className="mb-4">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+            >
+              <ChevronRight size={16} />
+              {' '}رجوع
+            </button>
+          </div>
+        )}
+        <EmptyState
+          icon={SlidersHorizontal}
+          title="الإعدادات غير متاحة"
+          detail="لا توجد إعدادات محفوظة لهذا الخادم حتى الآن."
+        />
+      </div>
+    );
+  }
+
   const details = guildQuery.data as GuildDetails;
   const settings = welcomeQuery.data;
-  const channels = details.channels.filter((ch) => ch.type === "text" || ch.type === "announcement");
+  const channels = details.channels.filter(
+    (ch) => ch.type === 'text' || ch.type === 'announcement',
+  );
   const roles = details.roles.filter((role) => !role.managed);
-  
-  return <div>{onBack && <div className="mb-4"><button onClick={onBack} data-testid="button-back-to-server" className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary transition"><ChevronRight size={16} /> رجوع</button></div>}<PageHeading eyebrow="إعدادات الخادم / ٠٥" title="ضبط غرفة التحكم" description={`إعدادات الترحيب والخادم لـ ${details.name}.`} /><div className="grid gap-7 xl:grid-cols-[1fr_380px]"><div className="space-y-6"><section className="border border-card-border bg-card p-5 md:p-7"><SectionTitle index="٠١" icon={MessageSquareText} title="إعدادات الترحيب" detail="تحكم في رسالة الترحيب وقناتها." /><div className="space-y-5"><Field label="قناة الترحيب" icon={Hash}><select value={settings.channelId ?? ""} disabled className="field bg-muted/50"><option value="">اختر قناة الترحيب</option>{channels.map((ch) => <option value={ch.id} key={ch.id}>#{ch.name}</option>)}</select></Field><Toggle checked={settings.enabled} onChange={() => {}} label="تفعيل الترحيب" detail="يبدأ البوت بإرسال الرسائل عند دخول عضو جديد." testId="toggle-server-settings-enabled" /><Toggle checked={settings.includeInviter} onChange={() => {}} label="إظهار الداعي" detail="أضف مصدر الدعوة إلى رسالة الترحيب عند توفره." testId="toggle-server-settings-inviter" /></div></section><section className="border border-card-border bg-card p-5 md:p-7"><SectionTitle index="٠٢" icon={UserPlus} title="الأدوار التلقائية" detail="الأدوار التي تُمنح تلقائيًا عند الانضمام." /><RolePicker roles={roles} selectedIds={settings.memberAutoRoleIds} onChange={() => {}} testPrefix="server-settings-member-role" label="أدوار الأعضاء" /><div className="mt-4"><RolePicker roles={roles} selectedIds={settings.botAutoRoleIds} onChange={() => {}} testPrefix="server-settings-bot-role" label="أدوار البوتات" /></div></section></div><section className="border border-card-border bg-card p-5 md:p-7"><SectionTitle index="٠٣" icon={Palette} title="تفضيلات المظهر" detail="ألوان وخلفيات بطاقة الترحيب." /><div className="space-y-5"><Field label="لون اللمسة"><div className="flex gap-2"><input type="color" value={settings.accentColor} disabled className="h-11 w-14 cursor-not-allowed border border-input bg-muted/50 p-1" /><input value={settings.accentColor} disabled className="field font-display bg-muted/50 cursor-not-allowed" dir="ltr" /></div></Field><Field label="نمط الرسالة"><div className="grid gap-3 sm:grid-cols-2"><button type="button" disabled className={`border p-4 text-right transition ${settings.style === "embed" ? "border-primary bg-accent/40" : "border-border"}`}><p className="text-sm font-bold">رسالة مدمجة</p><p className="mt-1 text-xs text-muted-foreground">هادئة وواضحة</p></button><button type="button" disabled className={`border p-4 text-right transition ${settings.style === "banner" ? "border-primary bg-accent/40" : "border-border"}`}><p className="text-sm font-bold">شريط عريض</p><p className="mt-1 text-xs text-muted-foreground">يفت الانتباه</p></button></div></Field></div></section></div></div>;
+
+  return (
+    <div>
+      {onBack && (
+        <div className="mb-4">
+          <button
+            onClick={onBack}
+            data-testid="button-back-to-server"
+            className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary transition"
+          >
+            <ChevronRight size={16} />
+            {' '}رجوع
+          </button>
+        </div>
+      )}
+
+      <PageHeading
+        eyebrow="إعدادات الخادم / ٠٥"
+        title="ضبط غرفة التحكم"
+        description={`إعدادات الترحيب والخادم لـ ${details.name}.`}
+      />
+
+      <div className="grid gap-7 xl:grid-cols-[1fr_380px]">
+        <div className="space-y-6">
+          <section className="border border-card-border bg-card p-5 md:p-7">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+              <MessageSquareText size={18} className="text-primary" />
+              إعدادات الترحيب
+            </h2>
+            <div className="space-y-5">
+              <label className="block">
+                <span className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
+                  <Hash size={13} className="text-muted-foreground" />
+                  قناة الترحيب
+                </span>
+                <select
+                  value={settings.channelId ?? ''}
+                  disabled
+                  className="field bg-muted/50 w-full"
+                >
+                  <option value="">اختر قناة الترحيب</option>
+                  {channels.map((ch) => (
+                    <option key={ch.id} value={ch.id}>
+                      #{ch.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.enabled}
+                data-testid="toggle-server-settings-enabled"
+                onClick={() => {}}
+                className="flex w-full items-center justify-between gap-4 text-right"
+              >
+                <span>
+                  <span className="block text-sm font-semibold">تفعيل الترحيب</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    يبدأ البوت بإرسال الرسائل عند دخول عضو جديد.
+                  </span>
+                </span>
+                <span
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition ${
+                    settings.enabled ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-transform ${
+                      settings.enabled ? 'translate-x-1' : 'translate-x-5'
+                    }`}
+                  />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.includeInviter}
+                data-testid="toggle-server-settings-inviter"
+                onClick={() => {}}
+                className="flex w-full items-center justify-between gap-4 text-right"
+              >
+                <span>
+                  <span className="block text-sm font-semibold">إظهار الداعي</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    أضف مصدر الدعوة إلى رسالة الترحيب عند توفره.
+                  </span>
+                </span>
+                <span
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition ${
+                    settings.includeInviter ? 'bg-primary' : 'bg-muted-foreground/30'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-transform ${
+                      settings.includeInviter ? 'translate-x-1' : 'translate-x-5'
+                    }`}
+                  />
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <section className="border border-card-border bg-card p-5 md:p-7">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+              <UserPlus size={18} className="text-primary" />
+              الأدوار التلقائية
+            </h2>
+            <div className="space-y-4">
+              <div className="border-t border-border/60 pt-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold">أدوار الأعضاء</p>
+                  <span className="text-[10px] text-muted-foreground">
+                    {settings.memberAutoRoleIds.length} محددة
+                  </span>
+                </div>
+                {roles.length ? (
+                  <div className="space-y-2">
+                    {roles.map((role) => (
+                      <label
+                        key={role.id}
+                        className="flex items-center gap-3 border border-border/70 px-3 py-2.5 text-xs"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={settings.memberAutoRoleIds.includes(role.id)}
+                          onChange={() => {}}
+                          className="accent-primary"
+                        />
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: role.color || '#ed1c24' }}
+                        />
+                        <span className="flex-1">{role.name}</span>
+                        {role.permissions?.includes('Administrator') && (
+                          <span className="text-[10px] text-primary">إدارية — لن تُسند</span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    لا توجد أدوار مؤهلة للإسناد التلقائي.
+                  </p>
+                )}
+              </div>
+
+              <div className="border-t border-border/60 pt-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold">أدوار البوتات</p>
+                  <span className="text-[10px] text-muted-foreground">
+                    {settings.botAutoRoleIds.length} محددة
+                  </span>
+                </div>
+                {roles.length ? (
+                  <div className="space-y-2">
+                    {roles.map((role) => (
+                      <label
+                        key={role.id}
+                        className="flex items-center gap-3 border border-border/70 px-3 py-2.5 text-xs"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={settings.botAutoRoleIds.includes(role.id)}
+                          onChange={() => {}}
+                          className="accent-primary"
+                        />
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: role.color || '#ed1c24' }}
+                        />
+                        <span className="flex-1">{role.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    لا توجد أدوار متاحة.
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="border border-card-border bg-card p-5 md:p-7">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+              <Palette size={18} className="text-primary" />
+              تفضيلات العرض
+            </h2>
+            <div className="space-y-5">
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">العنوان</span>
+                <input
+                  type="text"
+                  value={settings.headline ?? ''}
+                  disabled
+                  className="field bg-muted/50 w-full"
+                  placeholder="عنوان الترحيب"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">المحتوى</span>
+                <textarea
+                  value={settings.body ?? ''}
+                  disabled
+                  className="field min-h-[80px] resize-y bg-muted/50"
+                  placeholder="نص الرسالة..."
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 text-xs font-semibold">اللون المميز</span>
+                <input
+                  type="color"
+                  value={settings.accentColor ?? '#E50914'}
+                  disabled
+                  className="h-9 w-full cursor-pointer rounded-sm border-0 bg-transparent p-0"
+                />
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled
+                  className="flex-1 rounded border border-border bg-card px-3 py-2 text-xs font-semibold text-muted-foreground cursor-not-allowed"
+                >
+                  {settings.style === 'embed' ? 'Embed' : 'شريط عريض'}
+                </button>
+                <button
+                  type="button"
+                  disabled
+                  className="flex-1 rounded border border-border bg-card px-3 py-2 text-xs font-semibold text-muted-foreground cursor-not-allowed"
+                >
+                  رسالة مدمجة
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        {/* Preview sidebar */}
+        <Preview draft={settings} guild={guildQuery.data as Guild} />
+      </div>
+    </div>
+  );
 }
+
+function Dashboard({
+  status,
+  statusError,
+  selectedGuild,
+  guilds,
+  onSelectGuild,
+}: {
+  status?: DiscordStatus;
+  statusError: boolean;
+  selectedGuild: Guild | null;
+  guilds?: Guild[];
+  onSelectGuild: () => void;
+}) {
+  const summaryQuery = useGetDashboardSummary({ query: { queryKey: getGetDashboardSummaryQueryKey() } });
+  const activityQuery = useListGuildActivity(
+    selectedGuild?.id ?? '',
+    { query: { enabled: Boolean(selectedGuild?.id), queryKey: getListGuildActivityQueryKey(selectedGuild?.id ?? '') } },
+  );
+
+  if (statusError) {
+    return <ConnectionCard status={status} />;
+  }
+
+  return (
+    <div>
+      <PageHeading
+        eyebrow="الرئيسية / نظرة عامة"
+        title="مرحبًا،Chef!"
+        description="تتابع كل خوادم Discord من هنا. اختر سيرفرًا لل开始."
+        action={
+          <button
+            type="button"
+            onClick={onSelectGuild}
+            className="inline-flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-bold hover:border-primary hover:text-primary"
+          >
+            <ArrowUpLeft size={14} />
+            {' '}اختر سيرفر
+          </button>
+        }
+      />
+
+      {/* Connection status */}
+      <ConnectionCard status={status} />
+
+      {/* Stats */}
+      <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {summaryQuery.isLoading ? (
+          [1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-24 animate-pulse bg-muted rounded" />
+          ))
+        ) : summaryQuery.data ? (
+          <>
+            <StatCard
+              label="عدد الخوادم"
+              value={summaryQuery.data.guildCount}
+              detail="من 연결될 수 있는 서버"
+              icon={Server}
+              accent
+            />
+            <StatCard
+              label="الخوادم المُعدادّة"
+              value={summaryQuery.data.configuredGuildCount}
+              detail={`${summaryQuery.data.guildCount - summaryQuery.data.configuredGuildCount} لتكون جاهزة`}
+              icon={ShieldCheck}
+            />
+            <StatCard
+              label="إجمالي الأعضاء"
+              value={summaryQuery.data.totalMembers.toLocaleString('ar-SA')}
+              detail="في جميع الخوادم"
+              icon={Users}
+            />
+            <StatCard
+              label="الانضمامات الأخيرة"
+              value={summaryQuery.data.recentJoins}
+              detail={`معدل التوصيات: ${summaryQuery.data.inviteAttributionRate}%`}
+              icon={Activity}
+            />
+          </>
+        ) : (
+          <ErrorState label="تعذر تحميل الإحصائيات" />
+        )}
+      </div>
+
+      {/* Recent activity */}
+      <section className="mt-8 border border-card-border bg-card p-5 md:p-7">
+        <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+          <Activity size={18} className="text-primary" />
+          آخر النشاط
+        </h2>
+        {activityQuery.isLoading ? (
+          <div className="h-32 animate-pulse bg-muted rounded" />
+        ) : activityQuery.isError ? (
+          <ErrorState label="تعذر تحميل النشاط" />
+        ) : !activityQuery.data?.length ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            لا يوجد نشاط حتى الآن.
+          </p>
+        ) : (
+          <ActivityList items={activityQuery.data} />
+        )}
+      </section>
+
+      {/* Server cards (if any) */}
+      {guilds?.length && guilds.length > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-5 flex items-center gap-2 text-lg font-bold">
+            <Server size={18} className="text-primary" />
+            خوادمك
+          </h2>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {guilds.slice(0, 3).map((guild) => (
+              <div
+                key={guild.id}
+                className="flex items-center gap-4 border border-card-border bg-card p-4 transition hover:border-primary hover:bg-accent/30 cursor-pointer"
+                onClick={() => {
+                  const [, navigate] = useLocation();
+                  navigate(`/server/${guild.id}`);
+                }}
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-[#111110] font-display text-base font-bold text-white">
+                  {guild.iconUrl ? (
+                    <img src={guild.iconUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    initials(guild.name)
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold truncate">{guild.name}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {guild.memberCount} عضو | {guild.botPresent ? 'البوت متصل' : 'دعوة مطلوبة'}
+                  </p>
+                </div>
+                {guild.botPresent ? (
+                  <span className="text-emerald-500">
+                    <CheckCircle2 size={16} />
+                  </span>
+                ) : (
+                  <span className="text-primary">
+                    <Plus size={16} />
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusError: boolean }) {
+  return (
+    <div>
+      <PageHeading
+        eyebrow="الإعدادات / ٠١"
+        title="إعدادات التطبيق"
+        description="إدارة Discord OAuth والوضع."
+      />
+
+      <div className="border border-card-border bg-card p-5 md:p-7 space-y-6">
+        <section>
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
+            <Key size={18} className="text-primary" />
+            ربط حساب Discord
+          </h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            لتتمكن من إدارة خوادم Discord، قم بربط حسابك عبر OAuth2.
+          </p>
+          {status?.configured ? (
+            <div className="flex items-center gap-3 border border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20 p-4">
+              <CheckCircle2 size={20} className="text-emerald-500" />
+              <div>
+                <p className="font-semibold text-sm">حساب Discord مُربط</p>
+                <p className="text-xs text-muted-foreground mt-1">يمكنك الآن إدارة الخوادم.</p>
+              </div>
+            </div>
+          ) : (
+            <a
+              href="/api/auth/discord"
+              className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
+            >
+              <Link2 size={14} />
+              {' '}ربط حساب Discord
+            </a>
+          )}
+        </section>
+
+        <section>
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
+            <Zap size={18} className="text-primary" />
+            الوضع
+          </h2>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm font-semibold">الوضع الداكن</span>
+            <button
+              type="button"
+              onClick={() => {
+                const isDark = document.documentElement.classList.contains('dark');
+                document.documentElement.classList.toggle('dark', !isDark);
+                localStorage.setItem('discord-theme', !isDark ? 'dark' : 'light');
+              }}
+              className="flex items-center gap-2 border border-border bg-card px-4 py-2 text-xs font-semibold hover:border-primary"
+            >
+              {document.documentElement.classList.contains('dark') ? (
+                <>
+                  <Sun size={14} />
+                  {' '}الوضع الفاتح
+                </>
+              ) : (
+                <>
+                  <Moon size={14} />
+                  {' '}الوضع الداكن
+                </>
+              )}
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ─── Router ───
 
 function Router() {
   const [, navigate] = useLocation();
   const statusQuery = useGetDiscordStatus({ query: { queryKey: getGetDiscordStatusQueryKey() } });
   const guildQuery = useListGuilds({ query: { queryKey: getListGuildsQueryKey() } });
   const { selectedId, setSelectedId, selectedGuild } = useGuildSelection(guildQuery.data);
-  
-  return <AppShell selectedGuild={selectedGuild} onSelectGuild={() => navigate("/servers")} status={statusQuery.data}>
-    <Switch>
-      <Route path="/"><Dashboard status={statusQuery.data} statusError={statusQuery.isError} selectedGuild={selectedGuild} guilds={guildQuery.data} onSelectGuild={() => navigate("/servers")} /></Route>
-      <Route path="/servers"><Servers guilds={guildQuery.data} isLoading={guildQuery.isLoading} isError={guildQuery.isError} refetch={() => guildQuery.refetch()} selectedId={selectedId} onSelect={setSelectedId} /></Route>
-      <Route path="/server/:guildId">{(params) => <ServerDashboard guildId={params.guildId} onBack={() => navigate("/servers")} />}</Route>
-      <Route path="/server/:guildId/welcome">{(params) => <WelcomePage selectedGuild={selectedGuild} selectedId={params.guildId} onBack={() => navigate(`/server/${params.guildId}`)} />}</Route>
-      <Route path="/server/:guildId/activity">{(params) => <ActivityPage selectedId={params.guildId} selectedGuild={selectedGuild} onBack={() => navigate(`/server/${params.guildId}`)} />}</Route>
-      <Route path="/server/:guildId/settings">{(params) => <ServerSettingsPage guildId={params.guildId} onBack={() => navigate(`/server/${params.guildId}`)} />}</Route>
-      <Route path="/settings"><SettingsPage status={statusQuery.data} statusError={statusQuery.isError} /></Route>
-      <Route component={NotFound} />
-    </Switch>
-  </AppShell>;
+
+  return (
+    <AppShell
+      selectedGuild={selectedGuild}
+      onSelectGuild={() => navigate('/servers')}
+      status={statusQuery.data}
+    >
+      <Switch>
+        <Route path="/">
+          <Dashboard
+            status={statusQuery.data}
+            statusError={statusQuery.isError}
+            selectedGuild={selectedGuild}
+            guilds={guildQuery.data}
+            onSelectGuild={() => navigate('/servers')}
+          />
+        </Route>
+
+        <Route path="/servers">
+          <Servers
+            guilds={guildQuery.data}
+            isLoading={guildQuery.isLoading}
+            isError={guildQuery.isError}
+            refetch={() => guildQuery.refetch()}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
+        </Route>
+
+        {/* Server context routes */}
+        <Route path="/server/:guildId">
+          {(params) => (
+            <AppShell
+              selectedGuild={selectedGuild}
+              onSelectGuild={() => navigate('/servers')}
+              status={statusQuery.data}
+              guildId={params.guildId}
+              onBack={() => navigate('/servers')}
+            >
+              <ServerDashboard guildId={params.guildId} onBack={() => navigate('/servers')} />
+            </AppShell>
+          )}
+        </Route>
+
+        <Route path="/server/:guildId/welcome">
+          {(params) => (
+            <AppShell
+              selectedGuild={selectedGuild}
+              onSelectGuild={() => navigate('/servers')}
+              status={statusQuery.data}
+              guildId={params.guildId}
+              onBack={() => navigate(`/server/${params.guildId}`)}
+            >
+              <WelcomePage
+                selectedGuild={selectedGuild}
+                selectedId={params.guildId}
+                onBack={() => navigate(`/server/${params.guildId}`)}
+              />
+            </AppShell>
+          )}
+        </Route>
+
+        <Route path="/server/:guildId/activity">
+          {(params) => (
+            <AppShell
+              selectedGuild={selectedGuild}
+              onSelectGuild={() => navigate('/servers')}
+              status={statusQuery.data}
+              guildId={params.guildId}
+              onBack={() => navigate(`/server/${params.guildId}`)}
+            >
+              <ActivityPage
+                selectedId={params.guildId}
+                selectedGuild={selectedGuild}
+                onBack={() => navigate(`/server/${params.guildId}`)}
+              />
+            </AppShell>
+          )}
+        </Route>
+
+        <Route path="/server/:guildId/settings">
+          {(params) => (
+            <AppShell
+              selectedGuild={selectedGuild}
+              onSelectGuild={() => navigate('/servers')}
+              status={statusQuery.data}
+              guildId={params.guildId}
+              onBack={() => navigate(`/server/${params.guildId}`)}
+            >
+              <ServerSettingsPage
+                guildId={params.guildId}
+                onBack={() => navigate(`/server/${params.guildId}`)}
+              />
+            </AppShell>
+          )}
+        </Route>
+
+        {/* Public settings (account, not server-specific) */}
+        <Route path="/settings">
+          <SettingsPage status={statusQuery.data} statusError={statusQuery.isError} />
+        </Route>
+
+        <Route component={NotFound} />
+      </Switch>
+    </AppShell>
+  );
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><TooltipProvider><Router /><Toaster /></TooltipProvider></QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Router />
+        <Toaster />
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+}
+
+// ─── Welcome card live preview (shared by editor + server settings) ───
+function Preview({
+  draft,
+  guild,
+}: {
+  draft: WelcomeSettingsInput | WelcomeSettings;
+  guild: Guild;
+}) {
+  const accent = draft.accentColor || "#E50914";
+  return (
+    <aside className="space-y-4">
+      <div className="border border-card-border bg-card p-5">
+        <p className="mb-4 flex items-center gap-2 text-xs font-bold tracking-[.13em] text-primary">
+          <Eye size={14} />
+          معاينة البطاقة الحية
+        </p>
+        <div
+          className="relative overflow-hidden rounded-sm border border-white/10 p-6"
+          style={{ background: "linear-gradient(135deg, #1a1a1a, #0a0a0a)" }}
+        >
+          <div
+            className="absolute inset-y-0 right-0 w-1.5"
+            style={{ backgroundColor: accent }}
+          />
+          <div className="flex items-center gap-4">
+            {guild.iconUrl ? (
+              <img
+                src={guild.iconUrl}
+                alt=""
+                className="h-14 w-14 rounded-full object-cover"
+              />
+            ) : (
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10 font-display font-bold">
+                {initials(guild.name)}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="truncate text-lg font-bold">{guild.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {guild.memberCount.toLocaleString("ar-SA")} عضو
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 rounded-sm border border-white/10 bg-black/40 p-4">
+            <p className="text-sm font-semibold" style={{ color: accent }}>
+              {draft.headline || "أهلًا بك في السيرفر"}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              {(draft.body || "نورتنا {member}، نتمنى لك وقتًا ممتعًا.").replace(
+                "{member}",
+                "@member",
+              )}
+            </p>
+          </div>
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            النمط: {draft.style === "banner" ? "شريط عريض" : "Embed"} ·{" "}
+            {draft.enabled ? "مُفعّل" : "متوقف"}
+          </p>
+        </div>
+      </div>
+    </aside>
+  );
 }
 
 export default App;

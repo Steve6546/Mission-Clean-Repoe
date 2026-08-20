@@ -6,16 +6,9 @@ import { defineConfig } from 'vite';
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
 const rawPort = process.env.PORT;
+const port = rawPort ? Number(rawPort) : 5173;
 
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
-}
-
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
+if (rawPort && (Number.isNaN(port) || port <= 0)) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
@@ -71,6 +64,22 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+    },
+    // ─── Proxy /api requests to the backend Express server ───
+    // In production, the backend serves both the static files and the API;
+    // in development, Vite proxies /api to the backend's port.
+    proxy: {
+      '/api': {
+        target: process.env.BACKEND_URL || `http://localhost:${port}`,
+        changeOrigin: true,
+        // The backend runs on the same port in prod; in dev we target
+        // a separate backend if BACKEND_URL is set, otherwise fall back
+        // to the same port (which works when the backend is also served
+        // by Vite's middleware or when the backend is on the same process).
+        // When running in a Replit-like environment, the backend is usually
+        // on a different port specified by the environment.
+        rewrite: (path) => path,
+      },
     },
   },
   preview: {

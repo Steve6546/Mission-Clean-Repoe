@@ -126,19 +126,9 @@ export function toGuildResponse(guild: Guild) {
     guild.ownerId === guild.client.user?.id ||
     Boolean(botMember?.permissions.has(PermissionFlagsBits.ManageGuild));
 
-  const permissions = [
-    PermissionFlagsBits.ViewChannel,
-    PermissionFlagsBits.SendMessages,
-    PermissionFlagsBits.EmbedLinks,
-    PermissionFlagsBits.AttachFiles,
-    PermissionFlagsBits.ManageRoles,
-  ]
-    .reduce((value, permission) => value | permission, 0n)
-    .toString();
-
   const clientId = process.env.DISCORD_CLIENT_ID;
   const inviteUrl = clientId
-    ? `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&scope=bot%20applications.commands&permissions=${permissions}&guild_id=${encodeURIComponent(guild.id)}`
+    ? `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&scope=bot%20applications.commands&permissions=0&guild_id=${encodeURIComponent(guild.id)}`
     : null;
 
   return {
