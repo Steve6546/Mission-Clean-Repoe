@@ -43,6 +43,7 @@ export interface DiscordRole {
   /** @minimum 0 */
   position: number;
   managed: boolean;
+  permissions: string[];
 }
 
 export type GuildDetails = Guild & {
@@ -243,6 +244,8 @@ export interface WelcomeSettings {
   backgroundUrl: string | null;
   includeInviter: boolean;
   autoRoleIds: string[];
+  memberAutoRoleIds: string[];
+  botAutoRoleIds: string[];
   cardDesign?: CardDesign;
   messageSuite?: MessageSuite;
   commandConfig?: CommandConfig[];
@@ -270,6 +273,8 @@ export interface WelcomeSettingsInput {
   backgroundUrl: string | null;
   includeInviter: boolean;
   autoRoleIds: string[];
+  memberAutoRoleIds: string[];
+  botAutoRoleIds: string[];
   cardDesign?: CardDesign;
   messageSuite?: MessageSuite;
   commandConfig?: CommandConfig[];

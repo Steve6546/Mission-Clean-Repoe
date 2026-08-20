@@ -23,6 +23,8 @@ export interface WelcomeSettings {
   backgroundUrl: string | null;
   includeInviter: boolean;
   autoRoleIds: string[];
+  memberAutoRoleIds: string[];
+  botAutoRoleIds: string[];
   cardDesign?: CardDesign;
   messageSuite?: MessageSuite;
   commandConfig?: CommandConfig[];

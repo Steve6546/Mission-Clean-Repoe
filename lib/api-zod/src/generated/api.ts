@@ -108,7 +108,8 @@ export const GetGuildResponse = zod.object({
   "name": zod.string(),
   "color": zod.string(),
   "position": zod.number().min(getGuildResponseTwoRolesItemPositionMin),
-  "managed": zod.boolean()
+  "managed": zod.boolean(),
+  "permissions": zod.array(zod.string())
 }))
 }))
 
@@ -191,6 +192,8 @@ export const GetWelcomeSettingsResponse = zod.object({
   "backgroundUrl": zod.string().nullable(),
   "includeInviter": zod.boolean(),
   "autoRoleIds": zod.array(zod.string()),
+  "memberAutoRoleIds": zod.array(zod.string()),
+  "botAutoRoleIds": zod.array(zod.string()),
   "cardDesign": zod.object({
   "width": zod.number().min(getWelcomeSettingsResponseCardDesignWidthMin).max(getWelcomeSettingsResponseCardDesignWidthMax),
   "height": zod.number().min(getWelcomeSettingsResponseCardDesignHeightMin).max(getWelcomeSettingsResponseCardDesignHeightMax),
@@ -310,6 +313,8 @@ export const UpdateWelcomeSettingsBody = zod.object({
   "backgroundUrl": zod.string().nullable(),
   "includeInviter": zod.boolean(),
   "autoRoleIds": zod.array(zod.string()),
+  "memberAutoRoleIds": zod.array(zod.string()),
+  "botAutoRoleIds": zod.array(zod.string()),
   "cardDesign": zod.object({
   "width": zod.number().min(updateWelcomeSettingsBodyCardDesignWidthMin).max(updateWelcomeSettingsBodyCardDesignWidthMax),
   "height": zod.number().min(updateWelcomeSettingsBodyCardDesignHeightMin).max(updateWelcomeSettingsBodyCardDesignHeightMax),
@@ -421,6 +426,8 @@ export const UpdateWelcomeSettingsResponse = zod.object({
   "backgroundUrl": zod.string().nullable(),
   "includeInviter": zod.boolean(),
   "autoRoleIds": zod.array(zod.string()),
+  "memberAutoRoleIds": zod.array(zod.string()),
+  "botAutoRoleIds": zod.array(zod.string()),
   "cardDesign": zod.object({
   "width": zod.number().min(updateWelcomeSettingsResponseCardDesignWidthMin).max(updateWelcomeSettingsResponseCardDesignWidthMax),
   "height": zod.number().min(updateWelcomeSettingsResponseCardDesignHeightMin).max(updateWelcomeSettingsResponseCardDesignHeightMax),

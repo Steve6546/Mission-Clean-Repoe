@@ -13,4 +13,5 @@ export interface DiscordRole {
   /** @minimum 0 */
   position: number;
   managed: boolean;
+  permissions: string[];
 }

@@ -188,6 +188,7 @@ export async function getGuildDetails(guildId: string) {
         color: role.hexColor,
         position: role.position,
         managed: role.managed,
+        permissions: role.permissions.toArray(),
       }))
       .sort((a, b) => b.position - a.position),
   };
@@ -387,9 +388,12 @@ async function handleMemberJoin(member: GuildMember) {
     }
   }
 
-  const roleIds = member.user.bot
-    ? activeSettings.botAutoRoleIds ?? activeSettings.autoRoleIds
-    : activeSettings.memberAutoRoleIds ?? activeSettings.autoRoleIds;
+  const configuredRoleIds = member.user.bot
+    ? activeSettings.botAutoRoleIds
+    : activeSettings.memberAutoRoleIds;
+  const roleIds = configuredRoleIds.length
+    ? configuredRoleIds
+    : activeSettings.autoRoleIds;
 
   for (const roleId of roleIds) {
     try {
