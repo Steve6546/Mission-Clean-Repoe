@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { rm, cp, mkdir } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -118,6 +118,22 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // Copy the built dashboard SPA into dist/public so the backend can serve it.
+  // The backend is the Replit deployment entrypoint and serves both the UI
+  // (dist/public) and the /api routes from a single process.
+  const dashboardPublic = path.resolve(
+    artifactDir,
+    "..",
+    "discord-welcome-dashboard",
+    "dist",
+    "public",
+  );
+  const targetPublic = path.resolve(distDir, "public");
+  await rm(targetPublic, { recursive: true, force: true });
+  await mkdir(targetPublic, { recursive: true });
+  await cp(dashboardPublic, targetPublic, { recursive: true });
+  console.log(`Copied dashboard SPA -> ${targetPublic}`);
 }
 
 buildAll().catch((err) => {
