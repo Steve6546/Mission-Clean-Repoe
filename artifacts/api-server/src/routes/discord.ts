@@ -21,7 +21,7 @@ import {
   defaultCommandConfig,
   defaultMessageSuite,
   guildWelcomeSettingsTable,
-  isConfigured,
+  getActiveBotProfile,
   resolveDiscordConfig,
   saveDiscordConfig,
   type InsertGuildWelcomeSettings,
@@ -40,19 +40,31 @@ import { authGuard } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
-// --- Public: Discord connection status (reflects Dual-Config) ---
+// --- Public: Discord connection status (reflects active bot: DB or .env) ---
 router.get("/discord/status", async (_req, res) => {
-  const configured = await isConfigured();
+  const activeBot = await getActiveBotProfile();
+  const envConfigured = Boolean(
+    process.env.DISCORD_BOT_TOKEN &&
+    process.env.DISCORD_CLIENT_ID &&
+    process.env.DISCORD_CLIENT_SECRET,
+  );
+  const source = activeBot ? "database" : envConfigured ? "env" : "none";
+  const configured = Boolean(activeBot || envConfigured);
   const readyClient = configured ? await getReadyClient() : null;
+  const botUser =
+    activeBot?.botInfo?.tag ??
+    activeBot?.botInfo?.username ??
+    readyClient?.user?.tag ??
+    null;
   const response = GetDiscordStatusResponse.parse({
     configured,
     connected: Boolean(readyClient?.isReady()),
-    botUser: readyClient?.user?.tag ?? null,
+    botUser,
     message: configured
       ? readyClient
-        ? "تم الاتصال بـ Discord بنجاح."
+        ? `متصل${activeBot ? `: ${activeBot.name}` : ""}.`
         : "تم حفظ الإعدادات، لكن يتعذر الاتصال حاليًا. تحقق من التوكن والصلاحيات."
-      : "أضف أسرار Discord (ملف البيئة أو عبر الإعدادات) لتفعيل البيانات الحقيقية.",
+      : "أضف بوت Discord (عبر الإعدادات أو ملف البيئة) لتفعيل البيانات الحقيقية.",
   });
   res.json(response);
 });

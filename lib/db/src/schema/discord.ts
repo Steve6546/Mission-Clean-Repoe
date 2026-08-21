@@ -204,15 +204,34 @@ export const discordSessionsTable = pgTable(
 );
 
 /**
- * App-level Discord configuration (Dual-Config store).
+ * Multi-bot profiles (Dual-Config + multi-account support).
  *
- * Method 1: environment variables (DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID,
- * DISCORD_CLIENT_SECRET, DATABASE_URL) read directly by the server.
- * Method 2: an admin-entered config persisted here, encrypted at rest with a
- * server-side key (APP_SECRETS_KEY / fallback dev key). The token/secret are
- * NEVER returned to the frontend — only a boolean `configured` flag and the
- * bot's public identity (tag/id) are exposed.
+ * Each row is one Discord bot/account. Secrets are encrypted at rest with
+ * AES-256-GCM (server-side key). `botInfo` caches the public bot identity
+ * (name/avatar/tag/id) so the UI can render cards without re-calling Discord.
+ * `isActive` marks the currently-selected bot for the dashboard.
  */
+export const botProfilesTable = pgTable("bot_profiles", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull(),
+  botTokenEnc: text("bot_token_enc").notNull(),
+  clientIdEnc: text("client_id_enc").notNull(),
+  clientSecretEnc: text("client_secret_enc").notNull(),
+  isActive: boolean("is_active").notNull().default(false),
+  botInfo: jsonb("bot_info").$type<{
+    id: string;
+    username: string;
+    tag?: string;
+    avatarUrl: string | null;
+  }>(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const appSecretsTable = pgTable("app_secrets", {
   id: text("id").primaryKey().default("default"),
   botTokenEnc: text("bot_token_enc").notNull(),

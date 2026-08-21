@@ -18,6 +18,21 @@ export async function authGuard(
   next: NextFunction,
 ): Promise<void> {
   const token = getSessionToken(req);
+
+  // Local/insecure admin bypass. OFF by default. Enable only for local dev
+  // runs without an OAuth session (e.g. NODE_ENV=development with no DB).
+  // Production deployments MUST keep this unset so every request is verified
+  // against a real Discord OAuth session.
+  if (process.env.LOCAL_ADMIN_UNSAFE === "true" && process.env.NODE_ENV !== "production") {
+    (req as Request & { auth?: { discordUserId: string; username: string; avatarUrl: string | null } }).auth = {
+      discordUserId: "local-admin",
+      username: "Local Admin",
+      avatarUrl: null,
+    };
+    next();
+    return;
+  }
+
   if (!token) {
     res.status(401).json({ error: "Not authenticated" });
     return;

@@ -15,6 +15,7 @@ import {
   defaultMessageSuite,
   guildWelcomeSettingsTable,
   welcomeEventsTable,
+  getActiveBotSecrets,
   type GuildWelcomeSettings,
 } from "@workspace/db";
 import { logger } from "./logger";
@@ -44,8 +45,18 @@ const inviteSnapshots = new Map<
   Map<string, { uses: number; inviterId: string | null }>
 >();
 
+/** Resolve the bot token for the active connection (DB bot -> .env fallback). */
+async function resolveActiveToken(): Promise<string | null> {
+  const active = await getActiveBotSecrets().catch(() => null);
+  if (active?.botToken) return active.botToken;
+  return process.env.DISCORD_BOT_TOKEN ?? null;
+}
+
 function createClient(): Client | null {
-  if (!process.env.DISCORD_BOT_TOKEN) {
+  // Token is resolved lazily inside getReadyClient; createClient builds the
+  // client skeleton only. If no token is available we return null.
+  const token = tokenForCreate;
+  if (!token) {
     return null;
   }
 
@@ -74,7 +85,14 @@ function createClient(): Client | null {
   return nextClient;
 }
 
+let tokenForCreate: string | null = null;
+
 export async function getReadyClient(): Promise<Client | null> {
+  tokenForCreate = await resolveActiveToken();
+  if (!tokenForCreate) {
+    return null;
+  }
+
   const currentClient = client ?? createClient();
   if (!currentClient) {
     return null;
@@ -86,7 +104,7 @@ export async function getReadyClient(): Promise<Client | null> {
 
   if (!loginPromise) {
     loginPromise = currentClient
-      .login(process.env.DISCORD_BOT_TOKEN)
+      .login(tokenForCreate)
       .then(() => currentClient)
       .catch((error: unknown) => {
         logger.error({ err: error }, "Discord bot connection failed");

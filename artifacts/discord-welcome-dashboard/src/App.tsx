@@ -25,6 +25,10 @@ import NotFound from '@/pages/not-found';
 
 const queryClient = new QueryClient();
 
+// Discord Client ID sourced from the build-time env (set in .env as
+// VITE_DISCORD_CLIENT_ID). Used only for building invite links; never a secret.
+const discordClientId = import.meta.env.VITE_DISCORD_CLIENT_ID || '';
+
 // ─── Draft settings type (used for the welcome editor form state) ───
 type DraftSettings = WelcomeSettingsInput;
 
@@ -114,7 +118,6 @@ function AppShell({
 
   // Invite URL — built from the configured client id (server env) with
   // scoped permissions (NOT administrator). Falls back to a safe default.
-  const discordClientId = import.meta.env.VITE_DISCORD_CLIENT_ID || '';
   const inviteBaseUrl = discordClientId
     ? `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(discordClientId)}&permissions=0&scope=bot%20applications.commands`
     : 'https://discord.com/oauth2/authorize?scope=bot%20applications.commands';
@@ -1703,173 +1706,350 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 4)}...****`;
 }
 
-function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusError: boolean }) {
-  const [botToken, setBotToken] = useState("");
+type BotProfile = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  botInfo: { id: string; username: string; tag?: string; avatarUrl: string | null } | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function BotCard({
+  bot,
+  onActivate,
+  onDelete,
+}: {
+  bot: BotProfile;
+  onActivate: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const display = bot.botInfo?.tag ?? bot.botInfo?.username ?? bot.name;
+  return (
+    <div
+      className={`relative rounded-xl border p-4 backdrop-blur bg-card/70 transition ${
+        bot.isActive
+          ? "border-emerald-500/60 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+          : "border-card-border hover:border-primary/50"
+      }`}
+    >
+      {bot.isActive && (
+        <span className="absolute -top-2 -right-2 inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold text-white shadow">
+          <CheckCircle2 size={12} /> نشط الآن
+        </span>
+      )}
+      <div className="flex items-center gap-3">
+        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-muted flex items-center justify-center text-primary font-bold">
+          {bot.botInfo?.avatarUrl ? (
+            <img src={bot.botInfo.avatarUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <Bot size={22} />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold">{display}</p>
+          <p className="truncate text-xs text-muted-foreground">{bot.name}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex items-center gap-2">
+        {bot.isActive ? (
+          <span className="inline-flex items-center gap-1 text-xs text-emerald-500">
+            <CheckCircle2 size={14} /> البوت الحالي
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onActivate(bot.id)}
+            className="inline-flex items-center gap-1 rounded border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10 transition"
+          >
+            <RefreshCw size={13} /> تحديد
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onDelete(bot.id)}
+          className="inline-flex items-center gap-1 rounded border border-red-500/40 px-3 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-500/10 transition"
+        >
+          <Trash2 size={13} /> حذف
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddBotModal({
+  open,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
   const [clientId, setClientId] = useState("");
+  const [botToken, setBotToken] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [databaseUrl, setDatabaseUrl] = useState("");
-  const [verifying, setVerifying] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  async function handleVerify(e: React.FormEvent) {
+  if (!open) return null;
+
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    setVerifying(true);
+    setSaving(true);
     setResult(null);
     try {
-      const res = await fetch("/api/discord/verify-config", {
+      const res = await fetch("/api/discord/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botToken, clientId, clientSecret, databaseUrl }),
+        body: JSON.stringify({ name, clientId, botToken, clientSecret }),
       });
       const data = await res.json();
-      setResult({
-        ok: Boolean(data.ok),
-        message: data.message ?? (res.ok ? "تم الحفظ والتحقق بنجاح" : "فشل التحقق"),
-      });
+      if (res.ok && data.ok) {
+        setResult({ ok: true, message: data.message ?? "تم حفظ البوت." });
+        setName("");
+        setClientId("");
+        setBotToken("");
+        setClientSecret("");
+        onSaved();
+        setTimeout(onClose, 800);
+      } else {
+        setResult({ ok: false, message: data.message ?? "فشل حفظ البوت." });
+      }
     } catch {
       setResult({ ok: false, message: "تعذر الاتصال بالخادم." });
     } finally {
-      setVerifying(false);
+      setSaving(false);
     }
   }
 
-  const isConfigured = status?.configured;
-  const statusTone = isConfigured
-    ? "border-emerald-200 bg-emerald-50/65 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300"
-    : "border-amber-200 bg-amber-50/65 text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur">
+      <div className="w-full max-w-md rounded-2xl border border-card-border bg-card p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 text-lg font-bold">
+            <Plus size={18} className="text-primary" /> إضافة بوت جديد
+          </h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSave} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-xs font-semibold">اسم الحساب</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="مثال: بوت الخوادم الرسمي"
+              required
+              className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold">DISCORD_CLIENT_ID</label>
+            <input
+              type="text"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="معرّف التطبيق"
+              required
+              className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          <SecretInput
+            label="DISCORD_BOT_TOKEN"
+            value={botToken}
+            onChange={setBotToken}
+            placeholder="MTk4N... بوت توكن"
+          />
+          <SecretInput
+            label="DISCORD_CLIENT_SECRET"
+            value={clientSecret}
+            onChange={setClientSecret}
+            placeholder="سر التطبيق"
+          />
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex w-full items-center justify-center gap-2 rounded bg-[#ed1c24] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#ed1c24]/90 transition disabled:opacity-60"
+          >
+            {saving ? (
+              <>
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                جارٍ الفحص...
+              </>
+            ) : (
+              <>
+                <Zap size={15} /> ⚡ فحص وحفظ البوت
+              </>
+            )}
+          </button>
+
+          {result && (
+            <div
+              className={`flex items-start gap-2 border p-3 text-sm ${
+                result.ok
+                  ? "border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20"
+                  : "border-red-200 bg-red-50/65 dark:border-red-900 dark:bg-red-950/20"
+              }`}
+            >
+              {result.ok ? (
+                <CheckCircle2 size={18} className="mt-0.5 text-emerald-500" />
+              ) : (
+                <AlertTriangle size={18} className="mt-0.5 text-red-500" />
+              )}
+              <span>{result.message}</span>
+            </div>
+          )}
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusError: boolean }) {
+  const [bots, setBots] = useState<BotProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function loadBots() {
+    try {
+      const res = await fetch("/api/discord/bots");
+      if (res.ok) {
+        setBots(await res.json());
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Load once on mount — data is persisted server-side (DB or JSON fallback),
+  // so it survives page refreshes (no loss on F5).
+  useEffect(() => {
+    void loadBots();
+  }, []);
+
+  async function handleActivate(id: string) {
+    setActionError(null);
+    const res = await fetch(`/api/discord/bots/${id}/activate`, { method: "POST" });
+    if (res.ok) {
+      setBots((prev) => prev.map((b) => ({ ...b, isActive: b.id === id })));
+    } else {
+      setActionError("فشل تفعيل البوت.");
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setActionError(null);
+    const res = await fetch(`/api/discord/bots/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      setBots((prev) => prev.filter((b) => b.id !== id));
+    } else {
+      setActionError("فشل حذف البوت.");
+    }
+  }
+
+  const activeCount = bots.filter((b) => b.isActive).length;
 
   return (
     <div>
       <PageHeading
         eyebrow="الإعدادات / ٠١"
         title="إعدادات التطبيق"
-        description="إدارة Discord OAuth والوضع."
+        description="إدارة بوتات Discord المتعددة."
       />
 
-      <div className="border border-card-border bg-card p-5 md:p-7 space-y-6">
-        {/* --- حالة الاتصال الحالية --- */}
-        <div className={`flex items-center gap-3 border p-4 text-sm ${statusTone}`}>
-          {isConfigured ? (
+      <div className="space-y-6">
+        {/* --- حالة الاتصال --- */}
+        <div
+          className={`flex items-center gap-3 border p-4 text-sm ${
+            status?.configured
+              ? "border-emerald-200 bg-emerald-50/65 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300"
+              : "border-amber-200 bg-amber-50/65 text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300"
+          }`}
+        >
+          {status?.configured ? (
             <CheckCircle2 size={20} className="text-emerald-500" />
           ) : (
             <AlertTriangle size={20} className="text-amber-500" />
           )}
           <div>
             <p className="font-semibold">
-              {isConfigured ? "متصل" : "غير مُعد"}
+              {status?.configured ? "متصل" : "غير مُعد"}
               {status?.botUser ? `: ${status.botUser}` : ""}
             </p>
             <p className="text-xs opacity-80 mt-0.5">
-              {status?.message ?? "أضف مفاتيح Discord لتفعيل الاتصال."}
+              {status?.message ?? "أضف بوت Discord لتفعيل الاتصال."}
             </p>
           </div>
         </div>
 
+        {/* --- البوتات المحفوظة --- */}
+        <section>
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-lg font-bold">
+              <Bot size={18} className="text-primary" /> البوتات المحفوظة
+              {activeCount > 0 && (
+                <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-500">
+                  {activeCount} نشط
+                </span>
+              )}
+            </h2>
+            <button
+              type="button"
+              onClick={() => setModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
+            >
+              <Plus size={14} /> إضافة بوت
+            </button>
+          </div>
+
+          {actionError && (
+            <div className="mb-3 flex items-center gap-2 border border-red-200 bg-red-50/65 p-3 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/20">
+              <AlertTriangle size={16} /> {actionError}
+            </div>
+          )}
+
+          {loading ? (
+            <p className="text-sm text-muted-foreground">جارٍ التحميل...</p>
+          ) : bots.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-card-border p-8 text-center">
+              <Bot size={28} className="mx-auto mb-2 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                لا توجد بوتات محفوظة. اضغط «إضافة بوت» لربط بوت Discord.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {bots.map((b) => (
+                <BotCard key={b.id} bot={b} onActivate={handleActivate} onDelete={handleDelete} />
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* --- OAuth ربط الحساب --- */}
         <section>
           <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
-            <Key size={18} className="text-primary" />
-            ربط حساب Discord
+            <Key size={18} className="text-primary" /> ربط حساب Discord (OAuth)
           </h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            لتتمكن من إدارة خوادم Discord، قم بربط حسابك عبر OAuth2.
-          </p>
           <a
             href="/api/auth/discord/login"
             className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
           >
-            <Link2 size={14} />
-            {' '}ربط حساب Discord
+            <Link2 size={14} /> ربط حساب Discord
           </a>
-        </section>
-
-        {/* --- Dual-Config: فورم المفاتيح --- */}
-        <section>
-          <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
-            <ShieldCheck size={18} className="text-primary" />
-            مفاتيح Discord (Dual-Config)
-          </h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            أدخل المفاتيح هنا ليتم حفظها مشفّرة في قاعدة البيانات، أو اتركها فارغة لاستخدام
-            ملف البيئة في الخادم (<code>.env</code>). يتم التحقق منها فوراً عبر Discord API.
-            لا تُرسل المفاتيح إلى المتصفح أبداً.
-          </p>
-
-          <form onSubmit={handleVerify} className="space-y-4">
-            <SecretInput
-              label="DISCORD_BOT_TOKEN"
-              value={botToken}
-              onChange={setBotToken}
-              placeholder="MTk4N... بوت توكن"
-            />
-            <div>
-              <label className="mb-1 block text-xs font-semibold">DISCORD_CLIENT_ID</label>
-              <input
-                type="text"
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                placeholder="معرّف التطبيق"
-                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
-              />
-            </div>
-            <SecretInput
-              label="DISCORD_CLIENT_SECRET"
-              value={clientSecret}
-              onChange={setClientSecret}
-              placeholder="سر التطبيق"
-            />
-            <div>
-              <label className="mb-1 block text-xs font-semibold">DATABASE_URL (اختياري)</label>
-              <input
-                type="text"
-                value={databaseUrl}
-                onChange={(e) => setDatabaseUrl(e.target.value)}
-                placeholder="postgres://user:***@host:5432/db"
-                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={verifying}
-              className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition disabled:opacity-60"
-            >
-              <ShieldCheck size={14} />
-              {verifying ? "جارٍ التحقق..." : "حفظ وتحقق من الاتصال"}
-            </button>
-
-            {result && (
-              <div
-                className={`mt-3 flex items-start gap-2 border p-3 text-sm ${
-                  result.ok
-                    ? "border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20"
-                    : "border-red-200 bg-red-50/65 dark:border-red-900 dark:bg-red-950/20"
-                }`}
-              >
-                {result.ok ? (
-                  <CheckCircle2 size={18} className="mt-0.5 text-emerald-500" />
-                ) : (
-                  <AlertTriangle size={18} className="mt-0.5 text-red-500" />
-                )}
-                <span>{result.message}</span>
-              </div>
-            )}
-
-            {(botToken || clientSecret) && result?.ok && (
-              <p className="text-xs text-muted-foreground">
-                تم الحفظ بأمان. معاينة محميّة:{" "}
-                {botToken ? `${maskSecret(botToken)} ` : ""}
-                {clientSecret ? maskSecret(clientSecret) : ""}
-              </p>
-            )}
-          </form>
         </section>
 
         {/* --- الوضع --- */}
         <section>
           <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
-            <Zap size={18} className="text-primary" />
-            الوضع
+            <Zap size={18} className="text-primary" /> الوضع
           </h2>
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm font-semibold">الوضع الداكن</span>
@@ -1884,19 +2064,19 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
             >
               {document.documentElement.classList.contains('dark') ? (
                 <>
-                  <Sun size={14} />
-                  {' '}الوضع الفاتح
+                  <Sun size={14} /> {' '}الوضع الفاتح
                 </>
               ) : (
                 <>
-                  <Moon size={14} />
-                  {' '}الوضع الداكن
+                  <Moon size={14} /> {' '}الوضع الداكن
                 </>
               )}
             </button>
           </div>
         </section>
       </div>
+
+      <AddBotModal open={modalOpen} onClose={() => setModalOpen(false)} onSaved={loadBots} />
     </div>
   );
 }

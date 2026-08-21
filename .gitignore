@@ -90,3 +90,5 @@ dmypy.json
 # Temporary files
 tmp/
 temp/
+# Local bot-profile JSON fallback (runtime, not source)
+data/
