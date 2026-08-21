@@ -1688,7 +1688,7 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
             </div>
           ) : (
             <a
-              href="/api/auth/discord"
+              href="/api/auth/discord/login"
               className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
             >
               <Link2 size={14} />
