@@ -579,7 +579,7 @@ function Servers({
         action={
           <div className="flex items-center gap-2">
             <a
-              href={`${inviteBaseUrl}?client_id=DISCORD_CLIENT_ID&permissions=8&scope=bot%20applications.commands`}
+              href={`${inviteBaseUrl}?client_id=${encodeURIComponent(discordClientId)}&permissions=0&scope=bot%20applications.commands`}
               target="_blank"
               rel="noopener noreferrer"
               data-testid="button-add-server"
@@ -616,7 +616,7 @@ function Servers({
           detail="لا توجد خوادم جاهزة للعرض. تحقق من إعداد Discord وصلاحيات البوت."
           action={
             <a
-              href={`${inviteBaseUrl}?client_id=DISCORD_CLIENT_ID&permissions=8&scope=bot%20applications.commands`}
+              href={`${inviteBaseUrl}?client_id=${encodeURIComponent(discordClientId)}&permissions=0&scope=bot%20applications.commands`}
               target="_blank"
               rel="noopener noreferrer"
               className="bg-primary px-4 py-2.5 text-xs font-bold text-white inline-flex items-center gap-2"
@@ -817,7 +817,7 @@ function ServerDashboard({ guildId, onBack }: { guildId: string; onBack?: () => 
             </div>
           </div>
           <a
-            href={`https://discord.com/oauth2/authorize?client_id=DISCORD_CLIENT_ID&permissions=8&scope=bot%20applications.commands&guild_id=${guild.id}`}
+            href={`https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(discordClientId)}&permissions=0&scope=bot%20applications.commands&guild_id=${guild.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
