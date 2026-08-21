@@ -203,6 +203,27 @@ export const discordSessionsTable = pgTable(
   (table) => [index("discord_sessions_expiry_idx").on(table.expiresAt)],
 );
 
+/**
+ * App-level Discord configuration (Dual-Config store).
+ *
+ * Method 1: environment variables (DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID,
+ * DISCORD_CLIENT_SECRET, DATABASE_URL) read directly by the server.
+ * Method 2: an admin-entered config persisted here, encrypted at rest with a
+ * server-side key (APP_SECRETS_KEY / fallback dev key). The token/secret are
+ * NEVER returned to the frontend — only a boolean `configured` flag and the
+ * bot's public identity (tag/id) are exposed.
+ */
+export const appSecretsTable = pgTable("app_secrets", {
+  id: text("id").primaryKey().default("default"),
+  botTokenEnc: text("bot_token_enc").notNull(),
+  clientIdEnc: text("client_id_enc").notNull(),
+  clientSecretEnc: text("client_secret_enc").notNull(),
+  databaseUrlEnc: text("database_url_enc"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const insertGuildWelcomeSettingsSchema = createInsertSchema(
   guildWelcomeSettingsTable,
 ).omit({ id: true, updatedAt: true });

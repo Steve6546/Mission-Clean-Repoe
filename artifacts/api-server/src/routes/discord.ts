@@ -21,6 +21,9 @@ import {
   defaultCommandConfig,
   defaultMessageSuite,
   guildWelcomeSettingsTable,
+  isConfigured,
+  resolveDiscordConfig,
+  saveDiscordConfig,
   type InsertGuildWelcomeSettings,
 } from "@workspace/db";
 import {
@@ -32,17 +35,14 @@ import {
   listActivity,
   listGuilds,
 } from "../lib/discord";
+import { verifyDiscordCredentials } from "../lib/verify-discord";
 import { authGuard } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
-// --- Public: Discord connection status ---
+// --- Public: Discord connection status (reflects Dual-Config) ---
 router.get("/discord/status", async (_req, res) => {
-  const configured = Boolean(
-    process.env.DISCORD_BOT_TOKEN &&
-    process.env.DISCORD_CLIENT_ID &&
-    process.env.DISCORD_CLIENT_SECRET,
-  );
+  const configured = await isConfigured();
   const readyClient = configured ? await getReadyClient() : null;
   const response = GetDiscordStatusResponse.parse({
     configured,
@@ -51,10 +51,107 @@ router.get("/discord/status", async (_req, res) => {
     message: configured
       ? readyClient
         ? "تم الاتصال بـ Discord بنجاح."
-        : "تعذر الاتصال حاليًا. تحقق من التوكن والصلاحيات."
-      : "أضف أسرار Discord لتفعيل البيانات الحقيقية.",
+        : "تم حفظ الإعدادات، لكن يتعذر الاتصال حاليًا. تحقق من التوكن والصلاحيات."
+      : "أضف أسرار Discord (ملف البيئة أو عبر الإعدادات) لتفعيل البيانات الحقيقية.",
   });
   res.json(response);
+});
+
+// --- Public: verify a config set against the live Discord API ---
+const VerifyConfigSchema = z.object({
+  botToken: z.string().min(10, "Bot token مطلوب"),
+  clientId: z.string().min(1, "Client ID مطلوب"),
+  clientSecret: z.string().min(1, "Client Secret مطلوب"),
+  databaseUrl: z.string().url().optional().or(z.literal("")),
+});
+
+router.post("/discord/verify-config", async (req, res) => {
+  const parsed = VerifyConfigSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      ok: false,
+      message: "بيانات غير مكتملة",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+  const { botToken, clientId, clientSecret, databaseUrl } = parsed.data;
+
+  try {
+    const verification = await verifyDiscordCredentials({
+      botToken,
+      clientId,
+      clientSecret,
+    });
+
+    if (!verification.ok) {
+      res.status(422).json({
+        ok: false,
+        checks: verification.checks,
+        message: verification.message,
+      });
+      return;
+    }
+
+    // Verification passed: persist as the Dual-Config DB source (encrypted).
+    try {
+      await saveDiscordConfig({
+        botToken,
+        clientId,
+        clientSecret,
+        databaseUrl: databaseUrl || undefined,
+      });
+    } catch {
+      // If DB is unavailable we still return success for env-less verification,
+      // but flag that persistence failed.
+      res.status(200).json({
+        ok: true,
+        botUser: verification.botUser,
+        message: verification.message + " (لم يتم الحفظ في قاعدة البيانات — تأكد من DATABASE_URL).",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      ok: true,
+      botUser: verification.botUser,
+      message: verification.message,
+    });
+  } catch {
+    res.status(500).json({ ok: false, message: "تعذر التحقق من إعدادات Discord." });
+  }
+});
+
+// --- Protected: read persisted config meta (no secrets leaked) ---
+router.get("/discord/config", authGuard, async (_req, res) => {
+  const cfg = await resolveDiscordConfig();
+  res.json({
+    configured: Boolean(cfg.botToken && cfg.clientId && cfg.clientSecret),
+    source: cfg.source,
+    hasDatabaseUrl: Boolean(cfg.databaseUrl),
+    // NOTE: botToken / clientSecret / clientId are intentionally omitted.
+  });
+});
+
+// --- Protected: save config via admin form (DB source, encrypted) ---
+router.post("/discord/config", authGuard, async (req, res) => {
+  const parsed = VerifyConfigSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: "بيانات غير مكتملة" });
+    return;
+  }
+  const { botToken, clientId, clientSecret, databaseUrl } = parsed.data;
+  try {
+    await saveDiscordConfig({
+      botToken,
+      clientId,
+      clientSecret,
+      databaseUrl: databaseUrl || undefined,
+    });
+    res.status(200).json({ ok: true, message: "تم حفظ الإعدادات." });
+  } catch {
+    res.status(500).json({ ok: false, message: "فشل حفظ الإعدادات في قاعدة البيانات." });
+  }
 });
 
 // --- Protected: dashboard summary ---

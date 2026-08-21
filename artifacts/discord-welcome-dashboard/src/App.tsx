@@ -1661,6 +1661,32 @@ function Dashboard({
 }
 
 function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusError: boolean }) {
+  const [botToken, setBotToken] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [databaseUrl, setDatabaseUrl] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault();
+    setVerifying(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/discord/verify-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botToken, clientId, clientSecret, databaseUrl }),
+      });
+      const data = await res.json();
+      setResult({ ok: Boolean(data.ok), message: data.message ?? (res.ok ? "تم الحفظ" : "فشل التحقق") });
+    } catch {
+      setResult({ ok: false, message: "تعذر الاتصال بالخادم." });
+    } finally {
+      setVerifying(false);
+    }
+  }
+
   return (
     <div>
       <PageHeading
@@ -1695,6 +1721,87 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
               {' '}ربط حساب Discord
             </a>
           )}
+        </section>
+
+        <section>
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
+            <ShieldCheck size={18} className="text-primary" />
+            مفاتيح Discord (Dual-Config)
+          </h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            أدخل المفاتيح هنا ليتم حفظها مشفّرة في قاعدة البيانات، أو اتركها فارغة لاستخدام
+            ملف البيئة في الخادم (<code>.env</code>). يتم التحقق منها فوراً عبر Discord API.
+            لا تُرسل المفاتيح إلى المتصفح أبداً.
+          </p>
+
+          <form onSubmit={handleVerify} className="space-y-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold">Bot Token</label>
+              <input
+                type="password"
+                value={botToken}
+                onChange={(e) => setBotToken(e.target.value)}
+                placeholder="MTk4N... بوت توكن"
+                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold">Client ID</label>
+              <input
+                type="text"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="معرّف التطبيق"
+                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold">Client Secret</label>
+              <input
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder="سر التطبيق"
+                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold">DATABASE_URL (اختياري)</label>
+              <input
+                type="text"
+                value={databaseUrl}
+                onChange={(e) => setDatabaseUrl(e.target.value)}
+                placeholder="postgres://user:pass@host:5432/db"
+                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={verifying}
+              className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition disabled:opacity-60"
+            >
+              <ShieldCheck size={14} />
+              {verifying ? "جارٍ التحقق..." : "حفظ وتحقق"}
+            </button>
+
+            {result && (
+              <div
+                className={`mt-3 flex items-start gap-2 border p-3 text-sm ${
+                  result.ok
+                    ? "border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20"
+                    : "border-red-200 bg-red-50/65 dark:border-red-900 dark:bg-red-950/20"
+                }`}
+              >
+                {result.ok ? (
+                  <CheckCircle2 size={18} className="mt-0.5 text-emerald-500" />
+                ) : (
+                  <AlertTriangle size={18} className="mt-0.5 text-red-500" />
+                )}
+                <span>{result.message}</span>
+              </div>
+            )}
+          </form>
         </section>
 
         <section>
