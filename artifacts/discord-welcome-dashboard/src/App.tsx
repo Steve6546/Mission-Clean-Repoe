@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/reac
 import { Link, Route, Switch, useLocation, useParams } from 'wouter';
 import {
   Activity, AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ChevronRight, CircleDashed,
-  Copy, Eye, Hash, LayoutDashboard, Link2, Menu, MessageSquareText, Moon,
+  Copy, Eye, EyeOff, Hash, LayoutDashboard, Link2, Menu, MessageSquareText, Moon,
   Palette, Plus, Power, RefreshCw, Save, Server, Settings2, ShieldCheck, SlidersHorizontal,
   Sun, Trash2, UserPlus, Users, WandSparkles, X, Zap, Power as PowerIcon, Key,
   ArrowUpLeft, ChevronLeft,
@@ -1660,6 +1660,49 @@ function Dashboard({
   );
 }
 
+function SecretInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-semibold">{label}</label>
+      <div className="relative">
+        <input
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          className="w-full rounded border border-border bg-background px-3 py-2 pl-10 text-sm"
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          className="absolute inset-y-0 left-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
+          aria-label={show ? "إخفاء" : "إظهار"}
+        >
+          {show ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 6) return "••••••";
+  return `${value.slice(0, 4)}...****`;
+}
+
 function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusError: boolean }) {
   const [botToken, setBotToken] = useState("");
   const [clientId, setClientId] = useState("");
@@ -1679,13 +1722,21 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
         body: JSON.stringify({ botToken, clientId, clientSecret, databaseUrl }),
       });
       const data = await res.json();
-      setResult({ ok: Boolean(data.ok), message: data.message ?? (res.ok ? "تم الحفظ" : "فشل التحقق") });
+      setResult({
+        ok: Boolean(data.ok),
+        message: data.message ?? (res.ok ? "تم الحفظ والتحقق بنجاح" : "فشل التحقق"),
+      });
     } catch {
       setResult({ ok: false, message: "تعذر الاتصال بالخادم." });
     } finally {
       setVerifying(false);
     }
   }
+
+  const isConfigured = status?.configured;
+  const statusTone = isConfigured
+    ? "border-emerald-200 bg-emerald-50/65 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300"
+    : "border-amber-200 bg-amber-50/65 text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300";
 
   return (
     <div>
@@ -1696,6 +1747,25 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
       />
 
       <div className="border border-card-border bg-card p-5 md:p-7 space-y-6">
+        {/* --- حالة الاتصال الحالية --- */}
+        <div className={`flex items-center gap-3 border p-4 text-sm ${statusTone}`}>
+          {isConfigured ? (
+            <CheckCircle2 size={20} className="text-emerald-500" />
+          ) : (
+            <AlertTriangle size={20} className="text-amber-500" />
+          )}
+          <div>
+            <p className="font-semibold">
+              {isConfigured ? "متصل" : "غير مُعد"}
+              {status?.botUser ? `: ${status.botUser}` : ""}
+            </p>
+            <p className="text-xs opacity-80 mt-0.5">
+              {status?.message ?? "أضف مفاتيح Discord لتفعيل الاتصال."}
+            </p>
+          </div>
+        </div>
+
+        {/* --- OAuth ربط الحساب --- */}
         <section>
           <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
             <Key size={18} className="text-primary" />
@@ -1704,25 +1774,16 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
           <p className="text-sm text-muted-foreground mb-4">
             لتتمكن من إدارة خوادم Discord، قم بربط حسابك عبر OAuth2.
           </p>
-          {status?.configured ? (
-            <div className="flex items-center gap-3 border border-emerald-200 bg-emerald-50/65 dark:border-emerald-900 dark:bg-emerald-950/20 p-4">
-              <CheckCircle2 size={20} className="text-emerald-500" />
-              <div>
-                <p className="font-semibold text-sm">حساب Discord مُربط</p>
-                <p className="text-xs text-muted-foreground mt-1">يمكنك الآن إدارة الخوادم.</p>
-              </div>
-            </div>
-          ) : (
-            <a
-              href="/api/auth/discord/login"
-              className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
-            >
-              <Link2 size={14} />
-              {' '}ربط حساب Discord
-            </a>
-          )}
+          <a
+            href="/api/auth/discord/login"
+            className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition"
+          >
+            <Link2 size={14} />
+            {' '}ربط حساب Discord
+          </a>
         </section>
 
+        {/* --- Dual-Config: فورم المفاتيح --- */}
         <section>
           <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
             <ShieldCheck size={18} className="text-primary" />
@@ -1735,18 +1796,14 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
           </p>
 
           <form onSubmit={handleVerify} className="space-y-4">
+            <SecretInput
+              label="DISCORD_BOT_TOKEN"
+              value={botToken}
+              onChange={setBotToken}
+              placeholder="MTk4N... بوت توكن"
+            />
             <div>
-              <label className="mb-1 block text-xs font-semibold">Bot Token</label>
-              <input
-                type="password"
-                value={botToken}
-                onChange={(e) => setBotToken(e.target.value)}
-                placeholder="MTk4N... بوت توكن"
-                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold">Client ID</label>
+              <label className="mb-1 block text-xs font-semibold">DISCORD_CLIENT_ID</label>
               <input
                 type="text"
                 value={clientId}
@@ -1755,23 +1812,19 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
                 className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold">Client Secret</label>
-              <input
-                type="password"
-                value={clientSecret}
-                onChange={(e) => setClientSecret(e.target.value)}
-                placeholder="سر التطبيق"
-                className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
-              />
-            </div>
+            <SecretInput
+              label="DISCORD_CLIENT_SECRET"
+              value={clientSecret}
+              onChange={setClientSecret}
+              placeholder="سر التطبيق"
+            />
             <div>
               <label className="mb-1 block text-xs font-semibold">DATABASE_URL (اختياري)</label>
               <input
                 type="text"
                 value={databaseUrl}
                 onChange={(e) => setDatabaseUrl(e.target.value)}
-                placeholder="postgres://user:pass@host:5432/db"
+                placeholder="postgres://user:***@host:5432/db"
                 className="w-full rounded border border-border bg-background px-3 py-2 text-sm"
               />
             </div>
@@ -1782,7 +1835,7 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
               className="inline-flex items-center gap-2 bg-[#ed1c24] px-4 py-2 text-xs font-bold text-white hover:bg-[#ed1c24]/90 transition disabled:opacity-60"
             >
               <ShieldCheck size={14} />
-              {verifying ? "جارٍ التحقق..." : "حفظ وتحقق"}
+              {verifying ? "جارٍ التحقق..." : "حفظ وتحقق من الاتصال"}
             </button>
 
             {result && (
@@ -1801,9 +1854,18 @@ function SettingsPage({ status, statusError }: { status?: DiscordStatus; statusE
                 <span>{result.message}</span>
               </div>
             )}
+
+            {(botToken || clientSecret) && result?.ok && (
+              <p className="text-xs text-muted-foreground">
+                تم الحفظ بأمان. معاينة محميّة:{" "}
+                {botToken ? `${maskSecret(botToken)} ` : ""}
+                {clientSecret ? maskSecret(clientSecret) : ""}
+              </p>
+            )}
           </form>
         </section>
 
+        {/* --- الوضع --- */}
         <section>
           <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
             <Zap size={18} className="text-primary" />
